@@ -44,6 +44,8 @@ library(VSURF)
 library(dplyr)
 library(mice)
 
+library(vip)
+
 
 # ---------------------------------
 knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
@@ -338,7 +340,7 @@ cla <- read_csv("Loan_approval.csv") %>% dplyr::select(-Loan_ID)  # drop the row
 # ---------------------------------------------------------------------------
 cla$Total_Income = cla$ApplicantIncome + cla$CoapplicantIncome
 
-mice::md.pattern(loans, rotate.names = T)
+mice::md.pattern(cla, rotate.names = T)
 ```
 
 We see that we have some missing variables including a substantial run on Credit History. As this is likely to be a very important variable, has only two output states, and is not obviously derivable from the features provided, it is not a great candidate for imputation. 
@@ -485,13 +487,16 @@ $\color{red}{\text{Suggest a 80-20 split for training and test data to allow cro
 
 We first run an all variables (save the index variable Loan_ID) in a random forest to use it as a variable selection sieve. We use VSURF as it was the best performing in Speiser (2019). 
 
-```{r}
+```{r, echo=FALSE,results = FALSE, message=FALSE }
 set.seed(10)
 data_split <- initial_split(cla, prop = .8)
 train_data <- training(data_split)
 test_data  <- testing(data_split)
 use_data <- train_data %>%dplyr::select( -ApplicantIncome, -CoapplicantIncome, -Total_Income, -sApplicantIncome, -sCoapplicantIncome, -LoanAmount)
-surfedModel <- VSURF::VSURF(use_data%>%dplyr::select(-Loan_Status), use_data$Loan_Status, parallel=F)
+surfedModel <- invisible(VSURF::VSURF(use_data%>%dplyr::select(-Loan_Status), use_data$Loan_Status, parallel=F))
+
+```
+```{r, echo=F}
 print(paste("VSURF Final Stage ", colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.pred]))
 print(paste("VSURF 2nd Stage " , paste(colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.interp], collapse=", ")))
 print(paste("VSURF 1st Stage " , paste(colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.thres], collapse = ", ")))
@@ -533,14 +538,14 @@ for(var in 1:length(surfedModel$varselect.thres)){
 }
 ourAccuracy %>% ggplot(aes(x=Variables,y=Accuracy)) + ggtitle("Accuracy as variables are added") +geom_point() + ylim(0,1)
 ourAccuracy %>% ggplot(aes(x=Variables,y=Kappa)) +ggtitle("Kappa as Variables are added") +geom_point() + ylim(0,.6)
-kable(ourAccuracy)
+ourAccuracy
 ```
 
 Perhaps unsurprisingly we don't seem to receive any benefit of adding additional variable candidates, indeed the model actually performs somewhat worse for many options.
 
 Still if we use the first stage of VSURF and a wide parameter grid for the tunable parameters mtry and number of trees  we can attempt to tune a model.
 
-```{r}
+```{r, warning=F}
 our_data<-use_data[,colnames(use_data[(surfedModel$varselect.thres)])]
 our_data$Loan_Status<-use_data$Loan_Status
 loans_rf_rec <-  recipe(Loan_Status~., data = our_data)  %>%
@@ -567,7 +572,7 @@ tree_res %>%
     facet_wrap(~ .metric, scales = "free", nrow = 2) +
     scale_color_viridis_d(option = "plasma", begin = .9, end=0)
 final_loans_fit %>%      pull_workflow_fit() %>%      vip()
-kable(loans_best)
+loans_best
 ```
 Our full model has an accuracy of .863 and a Kappa of .624. This is an improvement of our prior model, particularly in Kappa.
 

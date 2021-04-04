@@ -31,6 +31,7 @@ library(tidyverse)
 library(ggplot2)
 library(knitr)
 library(kableExtra)
+
 library(caret)    # Model Framework
 library(skimr)    # Used for EDA
 library(klaR)     # Implemented KNN and Naive Bayes models, etc
@@ -38,8 +39,10 @@ library(class)    # used for KNN classifier
 
 # PLEASE ADD YOUR R LIBRARIES BELOW
 # ------------------------------
-
-
+library(tidymodels)
+library(VSURF) 
+library(dplyr)
+library(mice)
 
 
 # ---------------------------------
@@ -320,7 +323,7 @@ $\color{red}{\text{this argument needs to be supported and justifies our choice 
 Lastly, the common data set is exported to flat file.  Each group member performs their Loan Approval model study by loading the common data set and making subsequent selections or transformations while retaining the same observations.
 
 
-```{r build-common-dataset, eval=T}
+```{r build-common-dataset, eval=T, fig.width=10}
 # This code chunk should only be run to build the common data set.  
 # Any model builder should rely on importing the common data set only.
 # Thus, set eval=TRUE when generating a new version of the common data set.
@@ -334,6 +337,15 @@ cla <- read_csv("Loan_approval.csv") %>% dplyr::select(-Loan_ID)  # drop the row
 # Add a column for Total Income of Applicant and Co-Applicant
 # ---------------------------------------------------------------------------
 cla$Total_Income = cla$ApplicantIncome + cla$CoapplicantIncome
+
+mice::md.pattern(loans, rotate.names = T)
+```
+
+We see that we have some missing variables including a substantial run on Credit History. As this is likely to be a very important variable, has only two output states, and is not obviously derivable from the features provided, it is not a great candidate for imputation. 
+
+
+```{r}
+
 
 # We build a dataset in which all observations have fully populated values.
 # ---------------------------------------------------------------------------
@@ -447,7 +459,10 @@ We observe large differences in approval rates in the following categorical vari
 
 These differences should suggest the most significant categorical variables for prediction purposes.
 
+
+
 # Loan Approvals: Decision Tree Models
+
 
 $\color{red}{\text{Please set.seed() in your section to ensure your R code works as expected. }}$
 
@@ -466,18 +481,95 @@ $\color{red}{\text{Suggest a 80-20 split for training and test data to allow cro
 # Loan Approvals: Random Forest Models
 
 
+## Feature Selection
 
-$\color{red}{\text{@Scott - adapt this rubric of steps as appropriate since you push the analysis further than me.}}$
+We first run an all variables (save the index variable Loan_ID) in a random forest to use it as a variable selection sieve. We use VSURF as it was the best performing in Speiser (2019). 
 
-$\color{red}{\text{I can send randomForest code to you separately}}$
+```{r}
+set.seed(10)
+data_split <- initial_split(cla, prop = .8)
+train_data <- training(data_split)
+test_data  <- testing(data_split)
+use_data <- train_data %>%dplyr::select( -ApplicantIncome, -CoapplicantIncome, -Total_Income, -sApplicantIncome, -sCoapplicantIncome, -LoanAmount)
+surfedModel <- VSURF::VSURF(use_data%>%dplyr::select(-Loan_Status), use_data$Loan_Status, parallel=F)
+print(paste("VSURF Final Stage ", colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.pred]))
+print(paste("VSURF 2nd Stage " , paste(colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.interp], collapse=", ")))
+print(paste("VSURF 1st Stage " , paste(colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.thres], collapse = ", ")))
+```
+VSURF selects a single variable "model", and does so on both the final and penultimate stage. This suggests that a very parsimonious model indeed might be sufficient. 
 
-We will break the analysis of random forests into several phases:
 
-1. Selecting the number of trees require to achieve stability in the OOB error rate.
-2. Parameter tuning for the number of variables `mtry` to be used as each split.
-3. Studying sampling distribution of OOB error rates
-4. Assessing variable importance
-5. Assessing model accuracy of the random forest using tuned parameters
+```{r fig.cap="'Model' Using only Credit History" }
+loans_testing <- na.omit(testing(data_split))
+loans_testing["factorCreditHistory"] <- as.factor(as.logical((loans_testing)$Credit_History==1))
+loans_testing["factorLoanStatus"] <- as.factor((loans_testing)$Loan_Status=="Y")
+loans_testing %>% metrics(truth = factorLoanStatus, estimate = factorCreditHistory)
+```
+Using this as a "model" we get an accuracy of 83.1% and a Kappa of 0.486. Cohen (1960) would suggest that as an agreement unlikely to be caused by chance (which is important as a model that simply flagged every loan as a success would have an accuracy of .737 but a Kappa of course of 0)
+
+### Model building
+
+If we were to ignore VSURF's suggestion we can try to sweep through the stage 1 recommended features (which are reported in order from most promising to least)
+
+```{r}
+loan_testing <- na.omit(testing(data_split))
+loan_testing["factorCreditHistory"] <- as.factor(as.logical((loan_testing)$Credit_History==1))
+loan_testing["factorLoanStatus"] <- as.factor((loan_testing)$Loan_Status=="Y")
+actual_result <- loan_testing %>% metrics(truth = factorLoanStatus, estimate = factorCreditHistory)
+ourAccuracy <- tibble('Variables' = 1 , 'Kappa' =actual_result$.estimate[2], 'Accuracy' = actual_result$.estimate[1])
+ourAccuracy <- ourAccuracy[-c(1),]
+#loan_testing <- testing(data_split) #reset with nas added back in
+for(var in 1:length(surfedModel$varselect.thres)){
+  loans_rf_rec <-  recipe(Loan_Status~., data = train_data)  %>%
+    step_rm(everything(),-all_of(colnames(use_data[(surfedModel$varselect.thres)[1:var]])), -Loan_Status)  %>%
+    #step_knnimpute(all_predictors()) %>%
+    step_dummy(all_nominal(), -all_outcomes()) %>% 
+    prep()
+  loan_training<-juice(loans_rf_rec)
+  loan_ranger <- rand_forest( mode = "classification") %>%   set_engine("ranger") %>%     fit(Loan_Status ~ ., data = loan_training)
+  loan_testing <- loans_rf_rec  %>% bake(testing(data_split)) 
+  actual_result <- loan_ranger %>% predict(loan_testing) %>%     bind_cols(loan_testing) %>%     metrics(truth = Loan_Status, estimate = .pred_class)
+  ourAccuracy <- ourAccuracy %>% add_row('Variables' = var , 'Kappa' =actual_result$.estimate[2], 'Accuracy' = actual_result$.estimate[1])
+}
+ourAccuracy %>% ggplot(aes(x=Variables,y=Accuracy)) + ggtitle("Accuracy as variables are added") +geom_point() + ylim(0,1)
+ourAccuracy %>% ggplot(aes(x=Variables,y=Kappa)) +ggtitle("Kappa as Variables are added") +geom_point() + ylim(0,.6)
+kable(ourAccuracy)
+```
+
+Perhaps unsurprisingly we don't seem to receive any benefit of adding additional variable candidates, indeed the model actually performs somewhat worse for many options.
+
+Still if we use the first stage of VSURF and a wide parameter grid for the tunable parameters mtry and number of trees  we can attempt to tune a model.
+
+```{r}
+our_data<-use_data[,colnames(use_data[(surfedModel$varselect.thres)])]
+our_data$Loan_Status<-use_data$Loan_Status
+loans_rf_rec <-  recipe(Loan_Status~., data = our_data)  %>%
+  prep()
+loans_grid<-grid_regular(trees(), finalize(mtry(), use_data), levels=5)
+loan_training<-juice(loans_rf_rec)
+loan_ranger <- workflow()%>% add_recipe(loans_rf_rec) %>% add_model(rand_forest(mtry=tune::tune(), trees = tune::tune(), mode = "classification") %>% set_engine("ranger",importance = "impurity"))
+folds <- vfold_cv(our_data, v = 5)
+class_metrics <- metric_set(accuracy, kap)
+tree_res  <- loan_ranger %>% tune_grid(resamples = folds, grid=loans_grid, metrics=class_metrics)
+loans_best <-  tree_res %>% select_best("kap")
+final_loans_wf <-loan_ranger %>% finalize_workflow(loans_best)
+final_loans_fit <-final_loans_wf %>% fit(data = our_data) 
+testing_data<- (testing(data_split)) 
+our_data<-testing_data[,colnames(use_data[(surfedModel$varselect.thres)])]
+our_data$Loan_Status<-testing_data$Loan_Status
+loan_testing <- loans_rf_rec %>% bake(our_data)
+actual_result<-final_loans_fit %>% predict(loan_testing) %>%     bind_cols(loan_testing) %>%     metrics(truth = Loan_Status, estimate = .pred_class)
+kable(actual_result)
+tree_res %>%
+    collect_metrics() %>% mutate(trees = factor(trees)) %>% ggplot(aes(mtry, mean), color=trees) +
+    geom_line(size = 1.5, alpha = 0.6) +
+    geom_point(size = 2) +
+    facet_wrap(~ .metric, scales = "free", nrow = 2) +
+    scale_color_viridis_d(option = "plasma", begin = .9, end=0)
+final_loans_fit %>%      pull_workflow_fit() %>%      vip()
+kable(loans_best)
+```
+Our full model has an accuracy of .863 and a Kappa of .624. This is an improvement of our prior model, particularly in Kappa.
 
 
 ## Subsection A
@@ -512,6 +604,9 @@ In this section, we compare the performance of the decision tree, random forest 
 
 ## Using Prediction in Loans Approvals
 
+### Recomendations
+
+It would be very interesting to break down the Credit History Feature into components or at the least have a more continuous variable (say points above or below the FICO score cut off). Our models showed it to have an almost overwhelmingly strong impact on the output model, and presumably it is based on its own more continuous data that could be further analyzed. It seems likely, for example, that loan approval of applicants that do not meet the credit history requirements likely are closer to approval than applicants that seem mostly similar and do not receive approval. However, the data provided does not allow us to state that.
 
 
 
@@ -521,9 +616,11 @@ In this section, we compare the performance of the decision tree, random forest 
 
 $\color{red}{\text{Put your external references here.}}$
 
+Cohen, J. (1960). A coefficient of agreement for nominal scales. Educational and psychological measurement, 20(1), 37-46.
+
 [UC Business Analytics R Programming Guide - Random Forests](https://uc-r.github.io/random_forests)
 
-
+Speiser, J. L., Miller, M. E., Tooze, J., & Ip, E. (2019). A comparison of random forest variable selection methods for classification prediction modeling. Expert systems with applications, 134, 93-101.
 
 ## Code
 

@@ -494,12 +494,13 @@ train_data <- training(data_split)
 test_data  <- testing(data_split)
 use_data <- train_data %>%dplyr::select( -ApplicantIncome, -CoapplicantIncome, -Total_Income, -sApplicantIncome, -sCoapplicantIncome, -LoanAmount)
 surfedModel <- invisible(VSURF::VSURF(use_data%>%dplyr::select(-Loan_Status), use_data$Loan_Status, parallel=F))
-
 ```
 ```{r, echo=F}
-print(paste("VSURF Final Stage ", colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.pred]))
-print(paste("VSURF 2nd Stage " , paste(colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.interp], collapse=", ")))
-print(paste("VSURF 1st Stage " , paste(colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.thres], collapse = ", ")))
+vsurfStages <- tibble('Stage' = "Final" , 'Fields' =colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.pred])
+vsurfStages <-vsurfStages %>% add_row('Stage' = '2nd' , 'Fields'=paste(colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.interp], collapse=", "))
+vsurfStages <-vsurfStages %>% add_row('Stage' = '3rd' , 'Fields'=paste(colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.thres], collapse = ", "))
+vsurfStages
+
 ```
 VSURF selects a single variable "model", and does so on both the final and penultimate stage. This suggests that a very parsimonious model indeed might be sufficient. 
 
@@ -579,17 +580,6 @@ Looking at breakdowns of performance we see the best performance using Kappa to 
 
 Our full model has an accuracy of 0.811 and a Kappa of 0.455  Unfortunately, this is less than our "Model" of a simple credit_history. 
 
-
-## Subsection A
-
-$\color{red}{\text{Please set.seed() in your section to ensure your R code works as expected. }}$
-
-$\color{red}{\text{Maybe use a 80-20 split for training and test data to allow cross model comparison. }}$
-
-
-## Subsection B
-
-## Subsection C
 
 # Loan Approvals:  Gradient Boosting
 

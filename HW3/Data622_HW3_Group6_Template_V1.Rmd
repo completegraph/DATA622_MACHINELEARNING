@@ -564,17 +564,20 @@ our_data<-testing_data[,colnames(use_data[(surfedModel$varselect.thres)])]
 our_data$Loan_Status<-testing_data$Loan_Status
 loan_testing <- loans_rf_rec %>% bake(our_data)
 actual_result<-final_loans_fit %>% predict(loan_testing) %>%     bind_cols(loan_testing) %>%     metrics(truth = Loan_Status, estimate = .pred_class)
-kable(actual_result)
 tree_res %>%
-    collect_metrics() %>% mutate(trees = factor(trees)) %>% ggplot(aes(mtry, mean), color=trees) +
+    collect_metrics() %>% mutate(trees = factor(trees)) %>% ggplot(aes(mtry, mean, color=trees)) +
     geom_line(size = 1.5, alpha = 0.6) +
     geom_point(size = 2) +
     facet_wrap(~ .metric, scales = "free", nrow = 2) +
     scale_color_viridis_d(option = "plasma", begin = .9, end=0)
 final_loans_fit %>%      pull_workflow_fit() %>%      vip()
-loans_best
+kable(loans_best)
+kable(actual_result)
 ```
-Our full model has an accuracy of .863 and a Kappa of .624. This is an improvement of our prior model, particularly in Kappa.
+Looking at breakdowns of performance we see the best performance using Kappa to be mtry of 3 and trees of 2000. Unfortunately this doesn't 
+
+
+Our full model has an accuracy of 0.811 and a Kappa of 0.455  Unfortunately, this is less than our "Model" of a simple credit_history. 
 
 
 ## Subsection A
@@ -609,7 +612,21 @@ In this section, we compare the performance of the decision tree, random forest 
 
 ## Using Prediction in Loans Approvals
 
+We can use Decision Trees, Random Forest, or Gradient Boosting to build a model. The models final performance is as bellow:
+
+
+| Model | Accuracy | Kappa |
+|--------|-----------|-------|
+|Decision Trees| TBD| TBD|
+|Random Forest | 0.811 | 0.455 |
+|Gradient boosting | TBD|TBD|
+------------------------------
+
+Based on this we select the TBD Model as having the best balance of performance and ease of underwstanding.  
+
 ### Recomendations
+
+The loan data is strongly controlled by Credit History and a combined income. It seems likely that we could extract more information from the loan amount and interval by approval by knowing the interest rates offered/requested. This could lead to a new composite value of Yearly payment which would likely have a relationship with the applicants income. 
 
 It would be very interesting to break down the Credit History Feature into components or at the least have a more continuous variable (say points above or below the FICO score cut off). Our models showed it to have an almost overwhelmingly strong impact on the output model, and presumably it is based on its own more continuous data that could be further analyzed. It seems likely, for example, that loan approval of applicants that do not meet the credit history requirements likely are closer to approval than applicants that seem mostly similar and do not receive approval. However, the data provided does not allow us to state that.
 

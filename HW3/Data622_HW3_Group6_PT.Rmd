@@ -752,7 +752,7 @@ boost_predictions <- boost_last_fit %>% collect_predictions()
 boost_predictions %>% yardstick::metrics(truth=Loan_Status,estimate=.pred_class)
 
 conf_mat(boost_predictions, truth = Loan_Status, estimate = .pred_class)
-```
+``` 
 
 
 # Loan Approvals:  Model Performance and Assessment

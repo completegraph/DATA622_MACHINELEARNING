@@ -43,7 +43,8 @@ library(tidymodels)
 library(VSURF) 
 library(dplyr)
 library(mice)
-
+library(reshape2) #PT
+library(data.table) #PT
 library(vip)
 
 
@@ -83,7 +84,7 @@ This still gives a substantial subset $333$ out of $344$ original observations.
 The below table illustrates sample rows of the cleansed dataset used in the subsequent KNN analysis.
 
 
-```{r cleaned-subset}
+```{r cleaned-subset, eval=F}
 library(palmerpenguins)
 
 # The final dataset excludes observations with missing sex and drops the island and year variables.
@@ -93,7 +94,7 @@ head(pc) %>% kable(caption="Scrubbed penguin data set") %>% kable_styling(bootst
 
 ```
 
-We obtain `r nrow(pc)` rows of observations with 6 columns of explanatory and response variables.
+We obtain $r nrow(pc)$ rows of observations with 6 columns of explanatory and response variables.
 
 ## Data Transformation for KNN
 
@@ -119,7 +120,7 @@ Because the data set is gender balanced, $E[f(\text{sex})] \approx 0$ and $Stdev
 Hence, $f(\text{sex})$ is nearly normalized.  With these transformations, the KNN dataset is prepared for model evaluation.
 We illustrate the top 5 rows of the training data set below.  Note that the sampled indices are displayed in the left most column as row values in the resulting dataframe.
 
-```{r knn-split-data}
+```{r knn-split-data, eval=F}
 
 set.seed(10)
 
@@ -157,7 +158,7 @@ We will use `caret` to test a range of possible values of $k$ and select the opt
 
 We choose a 5-fold cross validation method to ensure the test set is sufficiently large.
 
-```{r knn-model-plot}
+```{r knn-model-plot, eval=F}
 model = train( species ~. , data = standardized , method = "knn" ,
          trControl = trainControl("cv", number = 5 ), tuneLength = 10 )
 
@@ -167,7 +168,7 @@ plot(model)
 
 Using the above model plot which shows the average cross validation accuracy at each parameter $k$ used in the KNN model, we see that the best kappa and accuracy occur at $k=5$ nearest neighbors.  This is evident when we display the (cross validation) model output below.
 
-```{r knn-model-result}
+```{r knn-model-result, eval=F}
 model
 
 # The best tuning parameter k that 
@@ -184,7 +185,7 @@ If the optimal $k$ shows a relatively smooth boundary, this is supporting eviden
 First, we construct the confusion matrix of one specific implementation of the KNN model for the train-test split following the same proportions as the cross-validation study.  We specifically use the `caret` interface rather than the simpler `class` interface to ensure consistency across multiple models in future.
 
 
-```{r knn-predmulti}
+```{r knn-predmulti, eval=F}
 
 # Simpler interface using the knn function within class.
 knn.pred5 = knn(train.X, test.X, train.Y , k = 5, prob = FALSE) 
@@ -192,7 +193,7 @@ cm5 = confusionMatrix(knn.pred5, test.Y)
 
 ```
 
-```{r knn-train}
+```{r knn-train, eval=F}
 
 # This model approach uses tuneGrid with a single value to calculate kNN 
 # only at a single number of nearest neighbors.
@@ -211,7 +212,7 @@ pred2 = predict(x2, newdata=test.X)
 We see in the confusion matrix output above that accuracy is 98.46% and kappa is 97.6%.  These are consistent with the cross validation results.   We conclude that KNN is a very effective classifier for penguin gender.  Only 1 penguin in 65 was misclassified:  a Chinstrap was predicted to be an Adelie penguin.
 
 
-```{r build-decision-grid}
+```{r build-decision-grid, eval=F}
 
 # We visualize a projection of the decision boundary flattened to 2 dimensions to illustrate
 # the smoothness of the KNN boundary at different values of k.
@@ -244,7 +245,7 @@ Next, we visualize the decision boundary of our KNN model to check for model sui
 Adapting the R recipe for KNN decision boundary plots found in the stackoverflow page [here](https://stackoverflow.com/questions/32449280/how-to-create-a-decision-boundary-graph-for-knn-models-in-the-caret-package)
 we see below that the decision boundary for $k=5$ nearest neighbor algorithm is reasonably smooth and not overfitted to the data.
 
-```{r knn-5-decision-boundary}
+```{r knn-5-decision-boundary, eval=F}
 ggplot(data=lgrid) + stat_contour(aes(x=bill_length_mm, y= bill_depth_mm, z = num_knnPredGrid), bins = 2 ) +
   geom_point( aes(x=bill_length_mm, y= bill_depth_mm, color = knnPredGrid),  size = 1, shape = 19, alpha = 0.2) +
   geom_point( data= test , aes(x=bill_length_mm, y=bill_depth_mm, color=pred2 ) , size = 4, alpha = 0.8, shape =24 ) +
@@ -258,7 +259,7 @@ The border between the Chinstrap and Adelie regions in the upper middle half sho
 
 
 
-```{r knn-1-decision-boundary}
+```{r knn-1-decision-boundary, eval=F}
 
 # This model approach uses tuneGrid with a single value to calculate kNN 
 # only at a single number of nearest neighbors.
@@ -487,7 +488,7 @@ $\color{red}{\text{Suggest a 80-20 split for training and test data to allow cro
 
 We first run an all variables (save the index variable Loan_ID) in a random forest to use it as a variable selection sieve. We use VSURF as it was the best performing in Speiser (2019). 
 
-```{r, echo=FALSE,results = FALSE, message=FALSE }
+```{r, echo=FALSE,results = FALSE, message=FALSE, eval=F }
 set.seed(10)
 data_split <- initial_split(cla, prop = .8)
 train_data <- training(data_split)
@@ -496,7 +497,7 @@ use_data <- train_data %>%dplyr::select( -ApplicantIncome, -CoapplicantIncome, -
 surfedModel <- invisible(VSURF::VSURF(use_data%>%dplyr::select(-Loan_Status), use_data$Loan_Status, parallel=F))
 
 ```
-```{r, echo=F}
+```{r, echo=F, eval=F}
 print(paste("VSURF Final Stage ", colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.pred]))
 print(paste("VSURF 2nd Stage " , paste(colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.interp], collapse=", ")))
 print(paste("VSURF 1st Stage " , paste(colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.thres], collapse = ", ")))
@@ -504,7 +505,7 @@ print(paste("VSURF 1st Stage " , paste(colnames(use_data%>%dplyr::select(-Loan_S
 VSURF selects a single variable "model", and does so on both the final and penultimate stage. This suggests that a very parsimonious model indeed might be sufficient. 
 
 
-```{r fig.cap="'Model' Using only Credit History" }
+```{r fig.cap="'Model' Using only Credit History" , eval=F}
 loans_testing <- na.omit(testing(data_split))
 loans_testing["factorCreditHistory"] <- as.factor(as.logical((loans_testing)$Credit_History==1))
 loans_testing["factorLoanStatus"] <- as.factor((loans_testing)$Loan_Status=="Y")
@@ -516,7 +517,7 @@ Using this as a "model" we get an accuracy of 83.1% and a Kappa of 0.486. Cohen 
 
 If we were to ignore VSURF's suggestion we can try to sweep through the stage 1 recommended features (which are reported in order from most promising to least)
 
-```{r}
+```{r, eval=F}
 loan_testing <- na.omit(testing(data_split))
 loan_testing["factorCreditHistory"] <- as.factor(as.logical((loan_testing)$Credit_History==1))
 loan_testing["factorLoanStatus"] <- as.factor((loan_testing)$Loan_Status=="Y")
@@ -545,7 +546,7 @@ Perhaps unsurprisingly we don't seem to receive any benefit of adding additional
 
 Still if we use the first stage of VSURF and a wide parameter grid for the tunable parameters mtry and number of trees  we can attempt to tune a model.
 
-```{r, warning=F}
+```{r, warning=F, eval=F}
 our_data<-use_data[,colnames(use_data[(surfedModel$varselect.thres)])]
 our_data$Loan_Status<-use_data$Loan_Status
 loans_rf_rec <-  recipe(Loan_Status~., data = our_data)  %>%
@@ -590,6 +591,8 @@ $\color{red}{\text{Maybe use a 80-20 split for training and test data to allow c
 
 # Loan Approvals:  Gradient Boosting
 
+Words go here
+
 ## Subsection A
 
 ```{r warning=F,message=F}
@@ -601,16 +604,25 @@ $\color{red}{\text{Maybe use a 80-20 split for training and test data to allow c
 # Data splitting
 set.seed(1234)
 
-lap_data_split <- initial_split(cla, prop=0.80, strata = Loan_Status)
+
+lap_data <- cla
+lap_data$Income_To_LoanAmt <- lap_data$Total_Income / lap_data$LoanAmount
+
+lap_data <- dplyr::select(lap_data, Credit_History, Income_To_LoanAmt, Property_Area, ApplicantIncome, Loan_Status)
+
+summary(lap_data)
+
+lap_data_split <- initial_split(lap_data, prop=0.7, strata=Loan_Status)
 
 lap_training <- lap_data_split %>% training()
 
 lap_test <- lap_data_split %>% testing()
 
-lap_folds <- vfold_cv(lap_training, v=5, repeats=5)
+#5, 5
+lap_folds <- vfold_cv(lap_training, v=5, repeats=3)
 
 # Specify the model
-mod_boost <- boost_tree(trees = 10, # 1000 at tune usage URL
+mod_boost <- boost_tree(trees = 100, # 1000 at tune usage URL
                         learn_rate = tune(),
                         sample_size = tune(),
                         mtry = tune(),
@@ -626,13 +638,29 @@ boost_params <- parameters(
   min_n(),
   tree_depth(),
   learn_rate(),
-  finalize(mtry(), select(lap_training,-Loan_Status)),
+  finalize(mtry(), dplyr::select(lap_training,-Loan_Status)),
   sample_size = sample_prop(c(0.4,0.9))
 )
 
 boost_grid <- grid_max_entropy(boost_params, size=10)
 ```
 
+```{r warning=F,message=F}
+# Feature Engineering
+
+lap_recipe <- recipe(Loan_Status ~ ., data = lap_training) %>%
+  step_YeoJohnson(all_numeric(), -all_outcomes()) %>%
+  step_normalize(all_numeric(), -all_outcomes()) %>%
+  step_dummy(all_nominal(), -all_outcomes())
+
+lap_recipe %>%
+  prep() %>%
+  bake(new_data = lap_training)
+
+summary(lap_training)
+
+
+```
 
 ```{r warning=F,message=F}
 # Create workflow
@@ -643,18 +671,33 @@ boost_workflow <- workflow() %>%
 
 
 ```{r warning=F,message=F}
+
+class_metrics <- metric_set(accuracy, kap, recall, precision, f_meas, roc_auc, sens, spec)
+
 boost_tuning <- tune_grid(
   object = boost_workflow,
   resamples = lap_folds,
   grid = boost_grid,
+  metrics=class_metrics,
   control = control_grid(verbose = TRUE)
 )
+
+boost_tuning %>% show_best(metric = 'kap')
+
+
+boost_tuning %>% collect_metrics() %>% 
+  dplyr::select(mean,mtry:sample_size) %>% data.table %>% 
+  melt(id="mean") %>% 
+  ggplot(aes(y=mean,x=value,colour=variable)) + 
+  geom_point(show.legend = FALSE) + 
+  facet_wrap(variable~. , scales="free") + theme_bw() +
+  labs(y="Kappa", x = "Parameter")
 ```
 
 ```{r warning=F,message=F}
-# Select best model based on roc_auc
+# Select best model based on kap
 best_boost <- boost_tuning %>%
-  select_best(metric = 'roc_auc')
+  select_best(metric = 'kap')
 
 # view the best tree parameters
 best_boost
@@ -677,8 +720,10 @@ boost_wf_fit <- final_boost_workflow %>%
 boost_fit <- boost_wf_fit %>%
   pull_workflow_fit()
 
-vip(boost_fit)
+#vip(boost_fit)
 ```
+
+## Above VIP, boost_fit
 
 ```{r warning=F,message=F}
 # train and evaluate
@@ -688,6 +733,8 @@ boost_last_fit <- final_boost_workflow %>%
 boost_last_fit %>% collect_metrics()
 ```
 
+## Mets above
+
 ```{r warning=F,message=F}
 boost_last_fit %>% collect_predictions() %>%
   roc_curve(truth = Loan_Status, estimate = .pred_N) %>%
@@ -696,6 +743,9 @@ boost_last_fit %>% collect_predictions() %>%
 boost_predictions <- boost_last_fit %>% collect_predictions()
 
 boost_predictions
+
+boost_predictions %>% yardstick::metrics(truth=Loan_Status,estimate=.pred_class)
+
 
 conf_mat(boost_predictions, truth = Loan_Status, estimate = .pred_class)
 ```

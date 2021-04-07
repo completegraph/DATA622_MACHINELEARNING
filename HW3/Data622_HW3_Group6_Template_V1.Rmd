@@ -550,7 +550,7 @@ Perhaps unsurprisingly (as this is broadly similar to what VSURF does internally
 Still if we use the features for interpretation VSURF has selected and a wide parameter grid for the tunable parameters mtry and number of trees  we can attempt to tune a model.
 
 ```{r, warning=F}
-our_data<-use_data[,colnames(use_data[(surfedModel$varselect.interp)])]
+our_data<-use_data[,colnames(use_data[(surfedModel$varselect.thres)])]
 our_data$Loan_Status<-use_data$Loan_Status
 loans_rf_rec <-  recipe(Loan_Status~., data = our_data)  %>%
   prep()
@@ -581,8 +581,16 @@ kable(actual_result)
 Looking at breakdowns of performance we see the best performance using Kappa to be mtry of 3 and trees of 1500 This does not appear to be a particular effective tuning and many others perform similarly. Unfortunately this doesn't reflect much in the way of actual model improvement. 
 
 
-Our full model has an accuracy on the test data of 0.821 and a Kappa of 0.478  Unfortunately, this is less than our "Model" of a simple credit_history. 
 
+
+Our full model has an accuracy and kappa as presented above.  Unfortunately, this is less than our "Model" of a simple credit_history. 
+```{r}
+rfbound<-final_loans_fit %>% predict(loan_testing) %>%     bind_cols(loan_testing)
+caret::confusionMatrix(rfbound$Loan_Status, rfbound$.pred_class )
+
+```
+
+We examine the confusion matrix and see the raw accuracy is .7790
 
 # Loan Approvals:  Gradient Boosting
 

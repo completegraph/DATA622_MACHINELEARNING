@@ -1,0 +1,100 @@
+---
+title: "HW3tree"
+author: "Randall Thompson"
+date: "3/23/2021"
+output: html_document
+---
+```{r}
+library(tidyverse)
+library(tidymodels)
+
+cla = read_csv("cla.csv")
+
+cla$Loan_Amount_Term = factor(cla$Loan_Amount_Term)
+cla$Loan_Status = factor(cla$Loan_Status)  # Convert the response to factor
+cla$Credit_History = factor(cla$Credit_History)
+cla$Property_Area = factor( cla$Property_Area)
+cla$Gender = factor( cla$Gender)
+cla$Married = factor(cla$Married)
+cla$Dependents = ordered(cla$Dependents, levels = c("0" , "1", "2" , "3+") )
+cla$Education = factor(cla$Education)
+cla$Self_Employed = factor( cla$Self_Employed)
+```
+
+```{r}
+loans$Credit_History <- replace_na(loans$Credit_History, 2)
+loans$Credit_History <- as.factor(loans$Credit_History)
+loans[sapply(loans, is.character)] <- lapply(loans[sapply(loans, is.character)], as.factor)
+```
+
+```{r}
+skimr::skim(loans)
+```
+
+
+
+```{r}
+GGally::ggpairs(loans, mapping = "Loan_Status", columns = 2:13) %>% print()
+```
+
+```{r}
+loan_rec <- recipe(Loan_Status~., data=cla) %>% 
+  prep()
+
+loan_rec
+```
+
+
+```{r}
+features <- loan_rec %>% 
+  juice()
+
+#caret::featurePlot(x=features[, 1:4], y=features$Loan_Status, "density", scales = list(x = list(relation="free"), y = list(relation="free")))
+```
+
+
+```{r}
+tree <- decision_tree() %>% 
+  set_engine("rpart") %>% 
+  set_mode("classification")
+
+tree
+```
+
+```{r}
+set.seed(1234)
+loan_split <- initial_split(cla)
+
+loan_train <- training(loan_split)
+loan_test <- testing(loan_split)
+
+loan_split
+```
+
+```{r}
+tree_fit <- tree %>% fit(Loan_Status~., data = juice(loan_rec))
+
+tree_fit 
+```
+
+```{r}
+set.seed(1234)
+loan_xval <- vfold_cv(data = cla, strata = Loan_Status) 
+```
+
+```{r}
+tree_res <- fit_resamples(
+  tree,
+  loan_rec,
+  resamples = loan_xval, 
+  metrics = metric_set(recall, precision, f_meas, accuracy, kap, roc_auc, sens, spec),
+  control = control_resamples(save_pred = TRUE)) 
+
+tree_res %>%  collect_metrics(summarize = TRUE)
+```
+
+
+```{r}
+workflow() %>% add_model(tree) %>% add_recipe(loan_rec) %>% fit(data = cla) %>% pull_workflow_fit() %>% vip::vip()
+```
+

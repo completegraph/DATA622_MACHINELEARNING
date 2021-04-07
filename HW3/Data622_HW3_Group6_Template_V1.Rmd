@@ -311,8 +311,7 @@ In this section, we construct a common loan approval data which will be used for
 1. It consists solely of the records with no missing values for any relevant column and then exclude useless variables.   We call this subset of observations.  This reduces the number of observations from 614 to 480 which is a 78.2% of the original data set.
 While this is a significant reduction in the number of observations the remaining data is still sufficient for fitting models.
 
-$\color{red}{\text{@Scott - can you share the evidence that imputing missing values for Credit History is dicey?}}$
-$\color{red}{\text{this argument needs to be supported and justifies our choice of a common data set.}}$
+Further Credit History in particular is relatively commonly missing, but it is a challenging feature to impute as it is a binary output, and from subject area knowledge is not directly determinable from the other data. Income is not directly linked to credit history (Akin,  2020), and one can have high income and poor credit. This makes it challenging to reliably impute.
 
 2. Next, we omit one irrelevant column:  the `Loan_ID`.  An identifier which is exogenous to the loan applicant and is assumed to be related solely to computer system processes.
 
@@ -340,10 +339,12 @@ cla <- read_csv("Loan_approval.csv") %>% dplyr::select(-Loan_ID)  # drop the row
 # ---------------------------------------------------------------------------
 cla$Total_Income = cla$ApplicantIncome + cla$CoapplicantIncome
 
-mice::md.pattern(cla, rotate.names = T)
-```
 
-We see that we have some missing variables including a substantial run on Credit History. As this is likely to be a very important variable, has only two output states, and is not obviously derivable from the features provided, it is not a great candidate for imputation. 
+```
+```{r, fig.width=9, message=FALSE}
+invisible(mice::md.pattern(cla %>% dplyr::select(-Total_Income), rotate.names = T))
+```
+We see that we have some missing variables including a substantial missing (43) on Credit History. We further see that there is a smattering of other missing features, but no observations with more than a few features missing. 
 
 
 ```{r}
@@ -485,9 +486,11 @@ $\color{red}{\text{Suggest a 80-20 split for training and test data to allow cro
 
 ## Feature Selection
 
-We first run an all variables (save the index variable Loan_ID) in a random forest to use it as a variable selection sieve. We use VSURF as it was the best performing in Speiser (2019). 
+We first run an all variables (save the index variable Loan_ID, and the constituent parts of scaled or combined variables) in a random forest to use it as a variable selection sieve. We use VSURF as it was the best performing in Speiser (2019). 
 
-```{r, echo=FALSE,results = FALSE, message=FALSE }
+VSURF for the uninitiated is a multi step variable selection process that first ranks variables by importance.  It then excludes features that have a null importance. VSURF generates both a selection of features for  for interpretation  by adding variables sequentially and generating random forests while minimizing OOB error, and a selection for  prediction which similarly sequentially adds variables but instead of blindly limiting OOB it penalizes adding variables that add noise. 
+
+```{r, echo=FALSE,results='hide', message=FALSE, warning=FALSE,fig.show='hide' }
 set.seed(10)
 data_split <- initial_split(cla, prop = .8)
 train_data <- training(data_split)
@@ -496,13 +499,13 @@ use_data <- train_data %>%dplyr::select( -ApplicantIncome, -CoapplicantIncome, -
 surfedModel <- invisible(VSURF::VSURF(use_data%>%dplyr::select(-Loan_Status), use_data$Loan_Status, parallel=F))
 ```
 ```{r, echo=F}
-vsurfStages <- tibble('Stage' = "Final" , 'Fields' =colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.pred])
-vsurfStages <-vsurfStages %>% add_row('Stage' = '2nd' , 'Fields'=paste(colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.interp], collapse=", "))
-vsurfStages <-vsurfStages %>% add_row('Stage' = '3rd' , 'Fields'=paste(colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.thres], collapse = ", "))
+vsurfStages <- tibble('Stage' = "Prediction" , 'Fields' =colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.pred])
+vsurfStages <-vsurfStages %>% add_row('Stage' = 'interpretation' , 'Fields'=paste(colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.interp], collapse=", "))
+vsurfStages <-vsurfStages %>% add_row('Stage' = 'Ranked Importance' , 'Fields'=paste(colnames(use_data%>%dplyr::select(-Loan_Status))[surfedModel$varselect.thres], collapse = ", "))
 vsurfStages
 
 ```
-VSURF selects a single variable "model", and does so on both the final and penultimate stage. This suggests that a very parsimonious model indeed might be sufficient. 
+VSURF selects a single variable "model" for predictive use. This suggests that a very parsimonious model indeed might be sufficient. 
 
 
 ```{r fig.cap="'Model' Using only Credit History" }
@@ -515,7 +518,7 @@ Using this as a "model" we get an accuracy of 83.1% and a Kappa of 0.486. Cohen 
 
 ### Model building
 
-If we were to ignore VSURF's suggestion we can try to sweep through the stage 1 recommended features (which are reported in order from most promising to least)
+If we were to ignore VSURF's suggestion we can try to sweep through the ranked recommended features (which are reported in order from most promising to least)
 
 ```{r}
 loan_testing <- na.omit(testing(data_split))
@@ -537,25 +540,25 @@ for(var in 1:length(surfedModel$varselect.thres)){
   actual_result <- loan_ranger %>% predict(loan_testing) %>%     bind_cols(loan_testing) %>%     metrics(truth = Loan_Status, estimate = .pred_class)
   ourAccuracy <- ourAccuracy %>% add_row('Variables' = var , 'Kappa' =actual_result$.estimate[2], 'Accuracy' = actual_result$.estimate[1])
 }
-ourAccuracy %>% ggplot(aes(x=Variables,y=Accuracy)) + ggtitle("Accuracy as variables are added") +geom_point() + ylim(0,1)
-ourAccuracy %>% ggplot(aes(x=Variables,y=Kappa)) +ggtitle("Kappa as Variables are added") +geom_point() + ylim(0,.6)
+ourAccuracy %>% ggplot(aes(x=Variables,y=Accuracy)) + ggtitle("Accuracy as variables are added") +geom_point(color="red") + ylim(0,1) + scale_color_viridis_d(option = "plasma", begin = .9, end=0)
+ourAccuracy %>% ggplot(aes(x=Variables,y=Kappa)) +ggtitle("Kappa as Variables are added") +geom_point(color="blue") + ylim(0,.6) + scale_color_viridis_d(option = "plasma", begin = .9, end=0)
 ourAccuracy
 ```
 
-Perhaps unsurprisingly we don't seem to receive any benefit of adding additional variable candidates, indeed the model actually performs somewhat worse for many options.
+Perhaps unsurprisingly (as this is broadly similar to what VSURF does internally) we don't seem to receive any benefit of adding additional variable candidates, indeed the model actually performs somewhat worse for many options.
 
-Still if we use the first stage of VSURF and a wide parameter grid for the tunable parameters mtry and number of trees  we can attempt to tune a model.
+Still if we use the features for interpretation VSURF has selected and a wide parameter grid for the tunable parameters mtry and number of trees  we can attempt to tune a model.
 
 ```{r, warning=F}
-our_data<-use_data[,colnames(use_data[(surfedModel$varselect.thres)])]
+our_data<-use_data[,colnames(use_data[(surfedModel$varselect.interp)])]
 our_data$Loan_Status<-use_data$Loan_Status
 loans_rf_rec <-  recipe(Loan_Status~., data = our_data)  %>%
   prep()
 loans_grid<-grid_regular(trees(), finalize(mtry(), use_data), levels=5)
 loan_training<-juice(loans_rf_rec)
 loan_ranger <- workflow()%>% add_recipe(loans_rf_rec) %>% add_model(rand_forest(mtry=tune::tune(), trees = tune::tune(), mode = "classification") %>% set_engine("ranger",importance = "impurity"))
-folds <- vfold_cv(our_data, v = 5)
-class_metrics <- metric_set(accuracy, kap)
+folds <- vfold_cv(our_data)
+class_metrics <- metric_set( kap, accuracy)
 tree_res  <- loan_ranger %>% tune_grid(resamples = folds, grid=loans_grid, metrics=class_metrics)
 loans_best <-  tree_res %>% select_best("kap")
 final_loans_wf <-loan_ranger %>% finalize_workflow(loans_best)
@@ -575,10 +578,10 @@ final_loans_fit %>%      pull_workflow_fit() %>%      vip()
 kable(loans_best)
 kable(actual_result)
 ```
-Looking at breakdowns of performance we see the best performance using Kappa to be mtry of 3 and trees of 2000. Unfortunately this doesn't 
+Looking at breakdowns of performance we see the best performance using Kappa to be mtry of 3 and trees of 1500 This does not appear to be a particular effective tuning and many others perform similarly. Unfortunately this doesn't reflect much in the way of actual model improvement. 
 
 
-Our full model has an accuracy of 0.811 and a Kappa of 0.455  Unfortunately, this is less than our "Model" of a simple credit_history. 
+Our full model has an accuracy on the test data of 0.821 and a Kappa of 0.478  Unfortunately, this is less than our "Model" of a simple credit_history. 
 
 
 # Loan Approvals:  Gradient Boosting
@@ -612,7 +615,7 @@ We can use Decision Trees, Random Forest, or Gradient Boosting to build a model.
 |Gradient boosting | TBD|TBD|
 ------------------------------
 
-Based on this we select the TBD Model as having the best balance of performance and ease of underwstanding.  
+Based on this we select the TBD Model as having the best balance of performance and ease of understanding.  
 
 ### Recomendations
 
@@ -628,11 +631,16 @@ It would be very interesting to break down the Credit History Feature into compo
 
 $\color{red}{\text{Put your external references here.}}$
 
+Akin, J. (2020, March 5). Does income affect credit scores? Experian https://www.experian.com/blogs/ask-experian/does-income-affect-credit-scores/. 
+
+
 Cohen, J. (1960). A coefficient of agreement for nominal scales. Educational and psychological measurement, 20(1), 37-46.
+
+Genuer, R., Poggi, J. M., & Tuleau-Malot, C. (2015). [VSURF: an R package for variable selection using random forests.](https://hal.archives-ouvertes.fr/hal-01251924/document) The R Journal, 7(2), 19-33.
 
 [UC Business Analytics R Programming Guide - Random Forests](https://uc-r.github.io/random_forests)
 
-Speiser, J. L., Miller, M. E., Tooze, J., & Ip, E. (2019). A comparison of random forest variable selection methods for classification prediction modeling. Expert systems with applications, 134, 93-101.
+Speiser, J. L., Miller, M. E., Tooze, J., & Ip, E. (2019). [A comparison of random forest variable selection methods for classification prediction modeling. Expert systems with applications](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7508310/), 134, 93-101. 
 
 ## Code
 

@@ -45,6 +45,7 @@ library(dplyr)
 library(mice)
 library(reshape2) #PT
 library(data.table) #PT
+library(xgboost)
 library(vip)
 
 
@@ -593,6 +594,8 @@ $\color{red}{\text{Maybe use a 80-20 split for training and test data to allow c
 
 Gradient Boosting model approach is an ensemble method that applies repeated models to resampled data and pooling estimates. A boosted tree fits the next tree to the residuals of the prior tree. The residual error is minimized through each successive tree and typically accomplished through shallow trees.
 
+xgboost: extreme gradient boosting
+
 ## Feature selection
 
 Based on the importance factor of the features from an earlier Decision Tree model, the following variables are selected as input into the gradient boosting model.
@@ -604,6 +607,8 @@ Based on the importance factor of the features from an earlier Decision Tree mod
 - Property_Area: valuable feature for semiurban and urban
 
 The data is split using 75% for training and 25% for test. Initially, the split was 80% training, but this caused the model to predict $Loan\_Status$ as Yes for every instance. By decreasing the training percentage, the model performed better.
+
+Create folds for the tuning process and just create five folds for this process.
 
 ```{r warning=F,message=F}
 # https://bcullen.rbind.io/post/2020-06-02-tidymodels-decision-tree-learning-in-r/
@@ -621,28 +626,28 @@ lap_data <- dplyr::select(lap_data, Credit_History, Income_To_LoanAmt, Property_
 
 summary(lap_data)
 
-lap_data_split <- initial_split(lap_data, prop=0.75, strata=Loan_Status)
+lap_data_split <- initial_split(lap_data, prop=0.8, strata=Loan_Status)
 
 lap_training <- lap_data_split %>% training()
 
 lap_test <- lap_data_split %>% testing()
 
-lap_folds <- vfold_cv(lap_training, v=5, repeats=3)
+lap_folds <- vfold_cv(lap_training, v=5, repeats=1)
 ```
 
 ## Model definition
 
-The $xgboost$ model engine creates the gradient boosting model. The tree input parameter is set to 100 based on trial and error. Blog post set the trees value to 1000, but sample runs above 100 did not improve accuracy. For the additional parameters, the tune() method allows the parameters to be determined by a tune grid to identify the best performing parameter definitions.
+The $xgboost$ model engine creates the gradient boosting model. The tree input parameter is set to 25 based on trial and error. Ssample runs above 30 did not improve accuracy. For the additional parameters, the tune() method allows the parameters to be determined by a tune grid to identify the best performing parameter definitions.
 
 ```{r warning=F,message=F}
 # Specify the model
-mod_boost <- boost_tree(trees = 100,
+mod_boost <- boost_tree(trees = 25,
                         learn_rate = tune(),
                         sample_size = tune(),
                         mtry = tune(),
                         min_n = tune(),
                         tree_depth = tune()) %>%
-  set_engine("xgboost", lambda=0, alpha=1, num_class=3, verbose=1) %>%
+  set_engine("xgboost", lambda=0, alpha=1, num_class=3, verbose=0, stop_iter=2) %>%
   set_mode("classification")
 
 ```
@@ -699,13 +704,15 @@ boost_tuning <- tune_grid(
 
 boost_tuning %>% show_best(metric = 'kap')
 
+#boost_tuning %>% collect_metrics()
+
 boost_tuning %>% collect_metrics() %>% 
   dplyr::select(mean,mtry:sample_size) %>% data.table %>% 
   melt(id="mean") %>% 
   ggplot(aes(y=mean,x=value,colour=variable)) + 
   geom_point(show.legend = FALSE) + 
   facet_wrap(variable~. , scales="free") + theme_bw() +
-  labs(y="Kappa", x = "Parameter")
+  labs(y="Mean log-loss", x = "Parameter")
 ```
 
 Based on the highest Kappa value, the best gradient boosting model is selected.
@@ -730,6 +737,19 @@ final_boost_workflow <- boost_workflow %>%
   finalize_workflow(best_boost)
 ```
 
+```{r warning=F,message=F}
+# fit the model
+boost_wf_fit <- final_boost_workflow %>%
+  fit(data = lap_training)
+```
+
+```{r warning=F,message=F}
+boost_fit <- boost_wf_fit %>%
+  pull_workflow_fit()
+
+vip(boost_fit)
+```
+
 The model produces and accuracy of 85% and an AUC of 82.9% based on the fit metrics. The ROC-AUC is plotted to confirm the calculated percentage.
 
 ```{r warning=F,message=F}
@@ -738,6 +758,10 @@ boost_last_fit <- final_boost_workflow %>%
   last_fit(lap_data_split)
 
 boost_last_fit %>% collect_metrics()
+
+#importance_matrix <- xgb.importance(model = best_boost)
+#print(importance_matrix)
+#xgb.plot.importance(importance_matrix = importance_matrix)
 ```
 
 The predictions from the gradient boosting model product a final accuracy of 85% and Kappa of 60.7% with the final confusion matrix of the test data predictions.

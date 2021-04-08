@@ -592,13 +592,13 @@ $\color{red}{\text{Maybe use a 80-20 split for training and test data to allow c
 
 # Loan Approvals:  Gradient Boosting
 
-Gradient Boosting model approach is an ensemble method that applies repeated models to resampled data and pooling estimates. A boosted tree fits the next tree to the residuals of the prior tree. The residual error is minimized through each successive tree and typically accomplished through shallow trees.
-
-xgboost: extreme gradient boosting
+Gradient Boosting model approach is an ensemble method that applies repeated models to resampled data and pooling estimates. A boosted tree fits the next tree to the residuals of the prior tree. The residual error is minimized through each successive tree and typically accomplished through shallow trees. The gradient boosting approach uses the XGBoost algorithm which stands for extreme gradient boosting.
 
 ## Feature selection
 
-Based on the importance factor of the features from an earlier Decision Tree model, the following variables are selected as input into the gradient boosting model.
+An initial attempt of the XGBoost model with all of the feature variables proved quite underwhelming with an accuracy of 0.75 and kappa of just 0.272. The importance chart showed $Credit\_History$ as clearly the most important (greater than 75%), then $ApplicantIncome$, followed by $Total\_Income$, and the $LoanAmount$. The dummy variable $Property\_Area\_Semiurban$ also made the list of important variables. In an effort to simply the model and also construct a definite relationship between the income and the loan amount, a derived variable $Income\_To\_LoanAmt$ is calculated as the ratio of the total income to the requested loan amount. The derived variable proved beneficial to increasing the model accuracy.
+
+Based on the importance factor of the features from the initial baseline model along with the success of the derived variable, the following variables are selected as input into the gradient boosting model.
 
 - Credit_History: the most important feature 
 
@@ -606,9 +606,7 @@ Based on the importance factor of the features from an earlier Decision Tree mod
 
 - Property_Area: valuable feature for semiurban and urban
 
-The data is split using 75% for training and 25% for test. Initially, the split was 80% training, but this caused the model to predict $Loan\_Status$ as Yes for every instance. By decreasing the training percentage, the model performed better.
-
-Create folds for the tuning process and just create five folds for this process.
+The data is split using 80% for training and 20% for test. Initial model attempts with the 80/20 split caused underfitting as the model predicted $Loan\_Status$ as Yes for every instance. By decreasing the count of trees and lowering the number of cross-validation folds, the gradient boosting model began to perform better.
 
 ```{r warning=F,message=F}
 # https://bcullen.rbind.io/post/2020-06-02-tidymodels-decision-tree-learning-in-r/
@@ -637,7 +635,9 @@ lap_folds <- vfold_cv(lap_training, v=5, repeats=1)
 
 ## Model definition
 
-The $xgboost$ model engine creates the gradient boosting model. The tree input parameter is set to 25 based on trial and error. Ssample runs above 30 did not improve accuracy. For the additional parameters, the tune() method allows the parameters to be determined by a tune grid to identify the best performing parameter definitions.
+The XGBoost model engine creates the gradient boosting model. The tree input parameter is set to 25 based on trial and error. Sample runs above 30 did not improve accuracy. With only five cross-validation folds generated, each with 10 combinations of the parameters, 50 unique XGBoost models are generated that each build 25 trees. The low number of variables does not require a great number of cross-validation folds, parameter combinations, or tree count in order to produce a high accuracy.
+
+For generating the combinations of parameters, the tune() method allows the parameters to be determined by a tune grid to identify the best performing parameter definitions.
 
 ```{r warning=F,message=F}
 # Specify the model
@@ -647,11 +647,11 @@ mod_boost <- boost_tree(trees = 25,
                         mtry = tune(),
                         min_n = tune(),
                         tree_depth = tune()) %>%
-  set_engine("xgboost", lambda=0, alpha=1, num_class=3, verbose=0, stop_iter=2) %>%
+  set_engine("xgboost", lambda=0, alpha=1, num_class=3, verbose=0) %>%
   set_mode("classification")
 
 ```
-The parameters are defined by the sampling size and then the parameter grid is built by the function grid_max_entropy(). The size of 10 was selected based on trial and error. Values above 10 did not provide improved model accuracy.
+The parameters are defined by the sampling size and then the parameter grid is built by the function grid_max_entropy(). The size of 10 was selected based on trial and error. Values above 10 did not provide improved model accuracy. As mentioned above, the 10 combinations of parameters for each of the 5 folds produces 50 unqiue models. The few number of variables does not require a high number of model variations to produce a high accuracy.
 
 ```{r warning=F,message=F}
 boost_params <- parameters(
@@ -664,7 +664,7 @@ boost_params <- parameters(
 
 boost_grid <- grid_max_entropy(boost_params, size=10)
 ```
-In order to properly run the tidymodels approach to model creation, a recipe is defined for the training data. For the numeric input variables, the data is transformed per the Yeo-Johnson transformation which is similar to the Box-Cox transformation. The numeric data is also normalized. The nominal data is transformed by creating dummy variables within the recipe.
+In order to properly run the tidymodels approach to model creation, a recipe is defined for the training data. For the numeric input variables, the data is transformed per the Yeo-Johnson transformation which is similar to the Box-Cox transformation. The numeric data is also normalized. The nominal data is transformed by creating dummy variables within the recipe. The Yeo-Johnson transformation ensures a near-normal shape to the $Income\_To\_LoanAmt$ variable, otherwise the model accuracy suffered greatly without the transformation.
 
 ```{r warning=F,message=F}
 # Feature Engineering
@@ -676,10 +676,8 @@ lap_recipe <- recipe(Loan_Status ~ ., data = lap_training) %>%
 
 lap_recipe %>%
   prep() %>%
-  bake(new_data = lap_training)
+  bake(new_data = lap_training) %>% glimpse()
 ```
-
-Following the tidymodels approach to model creation, the workflow is defined for the gradient boosting model.
 
 ```{r warning=F,message=F}
 # Create workflow
@@ -688,7 +686,7 @@ boost_workflow <- workflow() %>%
   add_model(mod_boost)
 ```
 
-The tune_grid() method computes the evaluation metrics based on the parameters of the model. The results with the highest Kappa value are displayed along with a Kappa value plotted against each parameter value.
+The tune_grid() method computes the evaluation metrics based on the parameters of the model. The results with the highest Kappa value are displayed. The log-loss metric is the default evaluation metric of the XGBoost algorithm. The tune_grid() produces the 50 unique XGBoost models to be considered.
 
 ```{r warning=F,message=F}
 
@@ -703,9 +701,12 @@ boost_tuning <- tune_grid(
 )
 
 boost_tuning %>% show_best(metric = 'kap')
+```
 
-#boost_tuning %>% collect_metrics()
+The five parameters - mtry, min_n, tree_depth, learn_rate, and sample_size - are plotted against the mean log-loss value, the default XGBoost evaluation metric. The mtry plot shows a range of 1 to 3, with most results on 2. The min_n plot shows a range just above zero to over 30. The tree depth plot shows a range just above zero to over 10, as 14 appears as the most common value. The learn rate plot shows the lower learn rates to be most common. The sample size plot follows the defined range from 0.4 to 0.9 with slightly higher volume at the range's higher end. 
 
+
+```{r warning=F,message=F}
 boost_tuning %>% collect_metrics() %>% 
   dplyr::select(mean,mtry:sample_size) %>% data.table %>% 
   melt(id="mean") %>% 
@@ -715,7 +716,17 @@ boost_tuning %>% collect_metrics() %>%
   labs(y="Mean log-loss", x = "Parameter")
 ```
 
-Based on the highest Kappa value, the best gradient boosting model is selected.
+Based on the highest Kappa value, the best gradient boosting model is selected. The best model as shown below contains the following parameter values.
+
+- mtry 2: Number of predictors randomly sampled at each split when creating the tree models. With only three variables, two is sufficient.
+
+- min_n 3: Minimum number of data points in a node before the node is split further. The value of three does seem low considering the number of instances.
+
+- tree_depth 14: Maximum depth of the tree. With three variables, this tree depth is likely higher than needed.
+
+- learn_rate 1.484305e-07: Rate at which the algorithm adapts for each iteration. The lower the learn rate the better.
+
+- sample_size 0.8813854: Amount of data used in the fitting step. With a defined range of 0.4 to 0.9, the result indicates a larger percentage of the data used in the fitting routine.
 
 ```{r warning=F,message=F}
 # Select best model based on kap
@@ -729,7 +740,7 @@ best_boost
 
 ## Model performance
 
-With the best model selected, the workflow is finalized before the model is fit based on the training data and subsequently generating predictions on the test data from the $lap\_data\_split$.
+With the best model selected, the workflow is finalized before the model is fit based on the training data and subsequently generating predictions on the test data set.
 
 ```{r warning=F,message=F}
 # finalize workflow
@@ -743,6 +754,8 @@ boost_wf_fit <- final_boost_workflow %>%
   fit(data = lap_training)
 ```
 
+The variable importance plot confirms the primary importance of the $Credit\_History$ variable. Given the few number of input variables, the chart also indicates the $Loan\_To\_LoanAmt$ variable as second important followed by the dummy variables for the property area.
+
 ```{r warning=F,message=F}
 boost_fit <- boost_wf_fit %>%
   pull_workflow_fit()
@@ -750,7 +763,7 @@ boost_fit <- boost_wf_fit %>%
 vip(boost_fit)
 ```
 
-The model produces and accuracy of 85% and an AUC of 82.9% based on the fit metrics. The ROC-AUC is plotted to confirm the calculated percentage.
+The model produces an accuracy of 86.3% and an AUC of 91.5% based on the fit metrics. The ROC-AUC is plotted to confirm the calculated percentage.
 
 ```{r warning=F,message=F}
 # train and evaluate
@@ -759,18 +772,14 @@ boost_last_fit <- final_boost_workflow %>%
 
 boost_last_fit %>% collect_metrics()
 
-#importance_matrix <- xgb.importance(model = best_boost)
-#print(importance_matrix)
-#xgb.plot.importance(importance_matrix = importance_matrix)
-```
-
-The predictions from the gradient boosting model product a final accuracy of 85% and Kappa of 60.7% with the final confusion matrix of the test data predictions.
-
-```{r warning=F,message=F}
 boost_last_fit %>% collect_predictions() %>%
   roc_curve(truth = Loan_Status, estimate = .pred_N) %>%
   autoplot()
+```
 
+The predictions from the gradient boosting model produce a final accuracy of 86.3% and Kappa of 63.9% with the final confusion matrix of the test data predictions.
+
+```{r warning=F,message=F}
 boost_predictions <- boost_last_fit %>% collect_predictions()
 
 boost_predictions %>% yardstick::metrics(truth=Loan_Status,estimate=.pred_class)

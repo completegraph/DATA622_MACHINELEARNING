@@ -30,26 +30,26 @@ skimr::skim(cla)
 Rows with missing data has been removed. Five of our independant variables have only two levels as displayed in n_unique. For our dependant variable, Loan_Status, we have twice the number of yes's than no's. We could downsample to have an even split of yes/no but with only, 480 rows left, we decided we didn't want to lose any more data. The four numeric variables have been duplicated then centered to a mean of 0 and scaled to a standard deviation of 1. Since out CART algorithm uses sum of squares to select splits and since center and scaled data shouldn't effect the relationship between variables, I'm going to stick with the original currency values. 
 
 ```{r}
-cla <- cla[,1:13]
+ncla <- cla[,1:13]
 ```
 
 
 Next we explore the pairwise correlation of numeric and factor variable separately.
 
 ```{r}
-GGally::ggpairs(cla, mapping = "Loan_Status", columns = c(6:8, 13, 12)) %>% print()
+GGally::ggpairs(ncla, mapping = "Loan_Status", columns = c(6:8, 13, 12)) %>% print()
 ```
 The pairwise correlation plot shows statistical significants with three asterisks next to the correlation value. As expected, Total Income is highly correlated with applicant and coapplicant incomes since Total income is a sum of the two. More importatntly, Loan Amount is moderately positively correlated with Applicant Income and weakly positively correlated with Coapplicant Income. Overall, there doesn't appear to be a large difference in distribution among numeric variables between a loan being approved or not.
 
 ```{r}
-GGally::ggpairs(cla, mapping = "Loan_Status", columns = c(1:5, 10:12), ) %>% print()
+GGally::ggpairs(ncla, mapping = "Loan_Status", columns = c(1:5, 10:12), ) %>% print()
 ```
 
 For pairwise factor bar charts, you're looking for large mismatches in box size within the upper triangle of the matrix. For example: number of dependants vs married. The top row of boxes look fairly even meaning married people have a fairly even distribution of number of dependants. However, non-married people have a high level of 0 dependants and not very many 1's, 2's, or 3+'s. Our varialbe of interest Loan_status has a large mismatch on Credit_history. There appears to be an even amount of people who have and don't have credit history when the loan status is not approved but almost no one has a loan status approved without also haveing a credit history of yes. This is quantified in our earlier analysis. This large variance should make credit history a good predictor variable.
 
 Now we create our model recipe. This recipe object describes the dependant and independant variables we wish to use and the data source. 
 ```{r}
-loan_rec <- recipe(Loan_Status~., data=cla) %>% 
+loan_rec <- recipe(Loan_Status~., data=ncla) %>% 
   prep()
 
 loan_rec
@@ -67,7 +67,7 @@ tree
 Now we create our training and test splits using an 80/20 split. The training set will be used to train our model while the test split will be used to evaluate our final model.
 ```{r}
 set.seed(1234)
-loan_split <- initial_split(cla, prop = .8)
+loan_split <- initial_split(ncla, prop = .8)
 
 loan_train <- training(loan_split)
 loan_test <- testing(loan_split)

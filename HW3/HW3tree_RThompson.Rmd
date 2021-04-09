@@ -1,0 +1,174 @@
+---
+title: "Data 622 Homework 3: Decision Tree Modeling of Loan Approval Data"
+author: "Randall Thompson   - Group 6"
+date: "Submitted by 04/09/2021"
+output:
+  html_document:
+    df_print: paged
+    highlight: pygments
+    number_sections: yes
+    theme: readable
+    toc: yes
+    toc_depth: 2
+    toc_float: no
+    fontsize: 12
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+    number_sections: true
+    df_print: kable
+    highlight: tango
+editor_options:
+  chunk_output_type: inline
+fontsize: 11pt
+urlcolor: blue
+---
+
+```{r setup , include=FALSE}
+
+# ---------------------------------
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(caret)
+
+cla = read_csv("cla.csv")
+
+cla$Loan_Amount_Term = factor(cla$Loan_Amount_Term)
+cla$Loan_Status = factor(cla$Loan_Status)  # Convert the response to factor
+cla$Credit_History = factor(cla$Credit_History)
+cla$Property_Area = factor( cla$Property_Area)
+cla$Gender = factor( cla$Gender)
+cla$Married = factor(cla$Married)
+cla$Dependents = ordered(cla$Dependents, levels = c("0" , "1", "2" , "3+") )
+cla$Education = factor(cla$Education)
+cla$Self_Employed = factor( cla$Self_Employed)
+```
+
+# Decision Tree Model
+
+This section uses the `tidymodels` framework to implement the CART decision tree model.
+It is one part of the submission for HW3 Group 6 but is rendered separately to avoid variable collision in code.
+
+
+```{r}
+ncla <- cla[,1:13]
+```
+
+
+Now we create our model recipe. This recipe object describes the dependent and independent variables we wish to use and the data source. 
+
+```{r}
+loan_rec <- recipe(Loan_Status~., data=ncla) %>% 
+  prep()
+
+loan_rec
+```
+
+Next we define the statistical model we wish to run on our recipe object. In this case, we are running a decision tree from the rpart package. The mode of decision tree we select is classification. Classification in the rpart package will split branches in a way that minimizes the sum of squares error.
+
+```{r}
+tree <- decision_tree() %>% 
+  set_engine("rpart") %>% 
+  set_mode("classification")
+
+tree
+```
+
+Now we create our training and test splits using an 80/20 split. The training set will be used to train our model while the test split will be used to evaluate our final model.
+```{r}
+set.seed(1234)
+loan_split <- initial_split(ncla, prop = .8)
+
+loan_train <- training(loan_split)
+loan_test <- testing(loan_split)
+
+loan_split
+```
+
+Now we use our model engine and our training data to create a classification model.
+```{r}
+tree_fit <- tree %>% fit(Loan_Status~., data = loan_train)
+
+tree_fit 
+```
+
+Our top level splits are credit history, property area, total income, then loan amount. Our first branch is also a terminal node. When credit history = 0, you are very unlikely to be approved for a loan. 
+
+No we're going to resample our training data with 10 crossfold validation by taking a random 90% and checking the variability of our estimates. 
+```{r}
+set.seed(1234)
+loan_xval <- vfold_cv(data = loan_train, strata = Loan_Status) 
+```
+
+Here we apply our resampled data to our model and define the metrics of interest.
+```{r}
+tree_res <- fit_resamples(
+  tree,
+  loan_rec,
+  resamples = loan_xval, 
+  metrics = metric_set(accuracy, kap, roc_auc, sens, spec),
+  control = control_resamples(save_pred = TRUE)) 
+
+tree_res %>%  collect_metrics(summarize = TRUE)
+```
+
+Our prediction accuracy is 73%. To maximize accuracy, we are going to select the model that will optimize for accuracy. This will be the model we use in our final workflow. We fit our total training data one last time and view our splits. 
+
+```{r}
+best_tree <- tree_res %>%
+  select_best("accuracy")
+
+final_wf <- 
+  workflow() %>% 
+  add_model(tree) %>% 
+  add_recipe(loan_rec) %>%
+  finalize_workflow(best_tree)
+
+final_tree <- 
+  final_wf %>%
+  fit(data = loan_train)
+
+final_tree
+```
+
+Our branches and nodes do not appear to have changed. Let's look at variable importance. Importance in a decision tree is a combination of number of times a variable appears in a branch, how high of a branch, and number of times it appears in a terminal node. 
+
+```{r}
+final_tree %>% 
+  pull_workflow_fit() %>% 
+  vip::vip()
+```
+
+Credit History is by far our most importable variable for predicting loan status. 
+
+Lastly, we test our model and collect our metrics. 
+
+```{r}
+final_fit <- 
+  final_wf %>%
+  last_fit(split = loan_split, metrics = metric_set( accuracy, kap, roc_auc, sens, spec))
+
+final_fit %>%
+  collect_metrics()
+```
+
+Our accuracy is 80%. Below is our confusion matrix. 
+
+```{r}
+final_fit %>%
+  collect_predictions() -> pred
+
+confusionMatrix(pred$.pred_class, pred$Loan_Status)
+```
+
+# Code
+
+```{r ref.label=knitr::all_labels(), echo=T, eval=F}
+
+```
+
+

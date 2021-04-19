@@ -33,3 +33,7 @@ For this assignment, we will be working with a very interesting mental health da
 2. Let's explore using Principal Component Analysis on this dataset. You will note that there are different types of questions in the dataset: column: E-W: ADHD self-report; column X – AM: mood disorders questionnaire, column AN-AS: Individual Substance Misuse; etc. Please reason through your work as you decide on which sets of variables you want to use to conduct Principal Component Analysis. (60)
 
 3. Assume you are modeling whether a patient attempted suicide (columnAX). Please use support vector machine to model this. You might want to consider reducing the number of variables or somehow use extracted information from the variables. This can be a really fun modeling task! (80)
+
+# Section 1: Clustering method
+
+# Section 3: SVM

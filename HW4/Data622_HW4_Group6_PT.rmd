@@ -34,6 +34,230 @@ For this assignment, we will be working with a very interesting mental health da
 
 3. Assume you are modeling whether a patient attempted suicide (columnAX). Please use support vector machine to model this. You might want to consider reducing the number of variables or somehow use extracted information from the variables. This can be a really fun modeling task! (80)
 
+```{r setup, include=FALSE}
+# Your libraries go here
+
+library(tidyverse)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+
+library(caret)    # Model Framework
+library(skimr)    # Used for EDA
+library(klaR)     # Implemented KNN and Naive Bayes models, etc
+library(class)    # used for KNN classifier
+
+# PLEASE ADD YOUR R LIBRARIES BELOW
+# ------------------------------
+library(stats)
+library(cluster)    # clustering algorithms
+library(factoextra) # clustering algorithms & visualization
+
+# ---------------------------------
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
+
+```
+
+## Read data in
+
+```{r}
+adhd_data <- read_csv("https://raw.githubusercontent.com/completegraph/DATA622_MACHINELEARNING/main/HW4/ADHD_data.csv")
+names(adhd_data) <- make.names(names(adhd_data),unique = TRUE)
+
+adhd_data <- adhd_data %>% 
+  mutate_if(is.numeric, as.factor) 
+
+# Remove ADHD individual questions
+adhd_data <- adhd_data[, -c(5:22)]
+
+# Remove MD individual questions
+adhd_data <- adhd_data[, -c(6:20)]
+
+# Remove Psych.meds (too many NAs)
+adhd_data <- adhd_data[, -c(21)]
+
+# Remove Initial
+#adhd_data <- adhd_data[, -c(1)]
+
+
+adhd_data$Age <- as.numeric(adhd_data$Age)
+adhd_data$ADHD.Total <- as.numeric(adhd_data$ADHD.Total)
+adhd_data$MD.TOTAL <- as.numeric(adhd_data$MD.TOTAL)
+
+# Remove instances with missing data
+adhd_data <- na.omit(adhd_data)
+
+adhd_data <- dplyr::mutate(adhd_data, ID = row_number())
+
+adhd_data <- adhd_data %>% relocate(ID)
+
+# Scale/standardize the data
+# Yes, this is being applied to categorical data
+#adhd_data[,2:20] <- scale(adhd_data[,2:20])
+
+dim(adhd_data)
+head(adhd_data)
+summary(adhd_data)
+
+
+p1 <- ggplot(adhd_data) + geom_bar(aes(x = ADHD.Total))
+
+p1 + facet_wrap(~ Abuse)
+```
+
 # Section 1: Clustering method
+```{r eval=F}
+# From: https://www.r-bloggers.com/2016/01/hierarchical-clustering-in-r-2/
+
+clusters <- hclust(dist(adhd_data[, 2:20]))
+plot(clusters)
+```
+
+```{r eval=F}
+clusterCut <- cutree(clusters, 2)
+```
+
+```{r eval=F}
+table(clusterCut, adhd_data$Suicide)
+```
+
+```{r}
+# Not using below
+# https://datascienceplus.com/k-means-clustering-in-r/
+#set.seed(20)
+#adhdCluster <- kmeans(adhd_data[, 2:20], 2, nstart = 20)
+#adhdCluster
+#table(adhdCluster$cluster, adhd_data$Suicide)
+
+```
+
+```{r eval=F}
+# All variables must be numeric
+
+# https://uc-r.github.io/kmeans_clustering
+distance <- get_dist(adhd_data)
+fviz_dist(distance, gradient = list(low = "#00AFBB", mid = "white", high = "#FC4E07"))
+
+k2 <- kmeans(adhd_data[,2:21], centers=2, nstart=25)
+#str(k2)
+k3 <- kmeans(adhd_data[,2:21], centers=3, nstart=25)
+k4 <- kmeans(adhd_data[,2:21], centers=4, nstart=25)
+k5 <- kmeans(adhd_data[,2:21], centers=5, nstart=25)
+k10 <- kmeans(adhd_data[,2:21], centers=10, nstart=25)
+
+# plots to compare
+p1 <- fviz_cluster(k2, geom = "point", data = adhd_data[,2:21]) + ggtitle("k = 2")
+p2 <- fviz_cluster(k3, geom = "point", data = adhd_data[,2:21]) + ggtitle("k = 3")
+p3 <- fviz_cluster(k4, geom = "point", data = adhd_data[,2:21]) + ggtitle("k = 4")
+p4 <- fviz_cluster(k5, geom = "point", data = adhd_data[,2:21]) + ggtitle("k = 5")
+p10 <- fviz_cluster(k10, geom = "point", data = adhd_data[,2:21]) + ggtitle("k = 10")
+
+
+library(gridExtra)
+grid.arrange(p1, p2, p3, p4, p10, nrow = 3)
+
+set.seed(123)
+
+fviz_nbclust(adhd_data[,2:21], kmeans, method = "wss")
+
+fviz_nbclust(adhd_data[,2:21], kmeans, method = "silhouette")
+
+# compute gap statistic
+gap_stat <- clusGap(adhd_data[,2:21], FUN = kmeans, nstart = 25,
+                    K.max = 10, B = 50)
+# Print the result
+print(gap_stat, method = "firstmax")
+
+fviz_gap_stat(gap_stat)
+```
+
+```{r}
+# https://www.r-bloggers.com/2016/06/clustering-mixed-data-types-in-r/
+
+# Remove ID and Initial before clustering
+gower_dist <- daisy(adhd_data[, 3:21],
+                    metric = "gower",
+                    type = list(logratio = 3))
+# Check attributes to ensure the correct methods are being used
+# (I = interval, N = nominal)
+# Note that despite logratio being called, 
+# the type remains coded as "I"
+summary(gower_dist)
+
+gower_mat <- as.matrix(gower_dist)
+
+adhd_data[
+  which(gower_mat == min(gower_mat[gower_mat != min(gower_mat)]),
+        arr.ind = TRUE)[1, ], ]
+
+adhd_data[
+  which(gower_mat == max(gower_mat[gower_mat != max(gower_mat)]),
+        arr.ind = TRUE)[1, ], ]
+
+
+# Calculate silhouette width for many k using PAM
+sil_width <- c(NA)
+
+for(i in 2:10){
+  
+  pam_fit <- pam(gower_dist,
+                 diss = TRUE,
+                 k = i)
+  
+  sil_width[i] <- pam_fit$silinfo$avg.width
+  
+}
+
+# Plot sihouette width (higher is better)
+
+plot(1:10, sil_width,
+     xlab = "Number of clusters",
+     ylab = "Silhouette Width")
+lines(1:10, sil_width)
+
+pam_fit <- pam(gower_dist, diss = TRUE, k = 3)
+
+pam_results <- adhd_data %>%
+  dplyr::select(3:21) %>%
+  mutate(cluster = pam_fit$clustering) %>%
+  group_by(cluster) %>%
+  do(the_summary = summary(.))
+
+pam_results$the_summary
+
+adhd_data[pam_fit$medoids, ]
+
+library(Rtsne)
+tsne_obj <- Rtsne(gower_dist, is_distance = TRUE)
+
+tsne_data <- tsne_obj$Y %>%
+  data.frame() %>%
+  setNames(c("X", "Y")) %>%
+  mutate(cluster = factor(pam_fit$clustering),
+         name = adhd_data$Initial)
+
+ggplot(aes(x = X, y = Y), data = tsne_data) +
+  geom_point(aes(color = cluster))
+
+```
 
 # Section 3: SVM
+
+
+```{r}
+# http://uc-r.github.io/svm
+
+
+# https://www.geeksforgeeks.org/classifying-data-using-support-vector-machinessvms-in-r/
+```
+
+
+
+
+
+
+
+
+
+
+

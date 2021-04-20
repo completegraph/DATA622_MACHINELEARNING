@@ -52,6 +52,8 @@ library(class)    # used for KNN classifier
 library(stats)
 library(cluster)    # clustering algorithms
 library(factoextra) # clustering algorithms & visualization
+library(tidymodels)
+library(e1071)
 
 # ---------------------------------
 knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
@@ -80,9 +82,24 @@ adhd_data <- adhd_data[, -c(21)]
 #adhd_data <- adhd_data[, -c(1)]
 
 
-adhd_data$Age <- as.numeric(adhd_data$Age)
-adhd_data$ADHD.Total <- as.numeric(adhd_data$ADHD.Total)
-adhd_data$MD.TOTAL <- as.numeric(adhd_data$MD.TOTAL)
+#adhd_data$Age <- as.numeric(adhd_data$Age)
+#adhd_data$ADHD.Total <- as.numeric(adhd_data$ADHD.Total)
+#adhd_data$MD.TOTAL <- as.numeric(adhd_data$MD.TOTAL)
+
+
+adhd_data$Age <- factor(adhd_data$Age, levels=1:41, ordered=T)
+adhd_data$ADHD.Total <- factor(adhd_data$ADHD.Total, levels=1:62, ordered=T)
+adhd_data$MD.TOTAL <- factor(adhd_data$MD.TOTAL, levels=1:18, ordered=T)
+adhd_data$Alcohol <- factor(adhd_data$Alcohol, levels=0:3, ordered=T)
+adhd_data$THC <- factor(adhd_data$THC, levels=0:3, ordered=T)
+adhd_data$Cocaine <- factor(adhd_data$Cocaine, levels=0:3, ordered=T)
+adhd_data$Stimulants <- factor(adhd_data$Stimulants, levels=0:3, ordered=T)
+adhd_data$Sedative.hypnotics <- factor(adhd_data$Sedative.hypnotics, levels=0:3, ordered=T)
+adhd_data$Opioids <- factor(adhd_data$Opioids, levels=0:3, ordered=T)
+adhd_data$Education <- factor(adhd_data$Education, levels=6:19, ordered=T)
+adhd_data$Abuse <- factor(adhd_data$Abuse, levels=0:7, ordered=T)
+adhd_data$Non.subst.Dx <- factor(adhd_data$Non.subst.Dx, levels=0:2, ordered=T)
+adhd_data$Subst.Dx <- factor(adhd_data$Subst.Dx, levels=0:3, ordered=T)
 
 # Remove instances with missing data
 adhd_data <- na.omit(adhd_data)
@@ -171,11 +188,11 @@ print(gap_stat, method = "firstmax")
 fviz_gap_stat(gap_stat)
 ```
 
-```{r}
+```{r eval=F}
 # https://www.r-bloggers.com/2016/06/clustering-mixed-data-types-in-r/
 
 # Remove ID and Initial before clustering
-gower_dist <- daisy(adhd_data[, 3:21],
+gower_dist <- daisy(adhd_data[, 6:21],
                     metric = "gower",
                     type = list(logratio = 3))
 # Check attributes to ensure the correct methods are being used
@@ -215,10 +232,10 @@ plot(1:10, sil_width,
      ylab = "Silhouette Width")
 lines(1:10, sil_width)
 
-pam_fit <- pam(gower_dist, diss = TRUE, k = 3)
+pam_fit <- pam(gower_dist, diss = TRUE, k = 7)
 
 pam_results <- adhd_data %>%
-  dplyr::select(3:21) %>%
+  dplyr::select(6:21) %>%
   mutate(cluster = pam_fit$clustering) %>%
   group_by(cluster) %>%
   do(the_summary = summary(.))
@@ -227,8 +244,9 @@ pam_results$the_summary
 
 adhd_data[pam_fit$medoids, ]
 
+
 library(Rtsne)
-tsne_obj <- Rtsne(gower_dist, is_distance = TRUE)
+tsne_obj <- Rtsne(gower_dist, is_distance = TRUE, perplexity=1)
 
 tsne_data <- tsne_obj$Y %>%
   data.frame() %>%
@@ -238,8 +256,8 @@ tsne_data <- tsne_obj$Y %>%
 
 ggplot(aes(x = X, y = Y), data = tsne_data) +
   geom_point(aes(color = cluster))
-
 ```
+
 
 # Section 3: SVM
 
@@ -249,6 +267,29 @@ ggplot(aes(x = X, y = Y), data = tsne_data) +
 
 
 # https://www.geeksforgeeks.org/classifying-data-using-support-vector-machinessvms-in-r/
+
+adhd_data_split <- initial_split(adhd_data, prop=0.7, strata=Suicide)
+
+adhd_training <- adhd_data_split %>% training()
+
+adhd_test <- adhd_data_split %>% testing()
+
+classifier <- svm(formula = Suicide ~ .,
+                 data = adhd_training[,6:21],
+                 type = 'C-classification',
+                 kernel = 'linear')
+
+classifier
+
+
+# Predicting the Test set results
+y_pred <- predict(classifier, newdata = adhd_test[,6:21])
+
+cm <- table(adhd_test$Suicide, y_pred)
+
+cm
+
+
 ```
 
 

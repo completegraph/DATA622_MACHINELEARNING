@@ -29,6 +29,7 @@ urlcolor: blue
 
 library(tidyverse)
 library(ggplot2)
+library(ggrepel)
 library(knitr)
 library(kableExtra)
 library(dplyr)
@@ -242,6 +243,30 @@ print(paste0("Conditional Mean MD.Total: ", mean( missing_disorderly$MD.TOTAL)  
 
 ```
 
+### Education
+
+We find that the modal years of Education is 12 and impute that value where none is provided.
+This corresponds to attainment of high school degree but not college.
+
+
+```{r education-impute}
+
+table(a$Education, useNA='ifany')
+```
+
+
+### Substance Use
+
+```{r impute-dx}
+
+table(a$Subst.Dx, a$Non.subst.Dx, useNA='ifany')
+
+```
+
+We infer some level of substance related drug use when Non substance related use is low because of the
+cross-tabulation frequency table.  We also assume Non-substance related drug use is 0 when no answer is provided.
+
+
 ## Transforming Variables
 
 In this section, we apply the above data imputation rules to the variables with missing values.
@@ -282,7 +307,7 @@ a %>% mutate(
              Non.subst.Dx = case_when( is.na(Non.subst.Dx) ~ 0 , # Most common case
                                        !is.na( Non.subst.Dx) ~ Non.subst.Dx ) ,
              
-             Subst.Dx = case_when( is.na( Subst.Dx ) ~ 3 , # Treat NA as a distinct category
+             Subst.Dx = case_when( is.na( Subst.Dx ) ~ 3 , # Treat NA as strong drug use category
                                    !is.na( Subst.Dx) ~ Subst.Dx )
                                    
         
@@ -334,7 +359,6 @@ df = data.frame(OldVar = c("Sex" , "Race" , "Court.order", "Abuse", "Hx.of.Viole
 df %>% kable(caption="Conversion of Old Variables to New") %>% kable_styling(bootstrap_options = c("hover", "striped"))
 ```
 
-## Exporting the New Data Set
 
 We export the dataset for reference purposes.
 
@@ -388,7 +412,7 @@ new_col_order = c(
 
 ab = aa[, new_col_order]
 
-skim(ab)
+#skim(ab)
 
 ```
 
@@ -452,80 +476,471 @@ The US Census Bureau shows Whites are 76.3%,  Blacks are 13.4%, Hispanics are 18
 We conclude the Blacks are overrepresented in the survey 57.1% (survey) vs. 13.4% (census), Whites are underrepresented 41.1% (survey) vs. 76.3%.  Hispanics are underrepresented 0.6% (survey) vs. 18.5% (census) and Asians are not represented at all 0% (survey) vs. 5.9% (census).
 
 
-# Multiple Factor Analysis - A Generalization of PCA
+# Multiple Factor Analysis of the Mental Health Data
 
-Multiple Factor analysis is a generalization of PCA that allows the combined use of quantitative variables and qualitative variables in a single analysis.   Its aim is similar to that of principal components analysis.  But whereas PCA does not allow qualitative variables, MFA allow them by combining two techniques:  PCA for quantitative variables and Multiple Correspondence Analysis (MCA) for qualitiative variables.   The key contribution of MFA is to systematically group variables as: `active` or `supplementary` and to assign a weight to the contribution of each group of variables to the final output.   The key authors of the textbook explaining the MFA approach and the software package `FactoMineR` and `FactoShiny`  are French: Jerome Pages and Francois Husson, "Multiple Factor Analysis by Example Using R" and the [FactoMineR website](http://factominer.free.fr/) contains the required software.
-   
+Multiple Factor Analysis (MFA) is a generalization of principal components analysis (PCA) that allows the combined use of quantitative and *qualitative* variables in a single model.   Because PCA does not support qualitative variables, I have chosen to implement MFA for this assignment.  MFA can be viewed as a weighted combination of PCA for quantitative variables and Multiple Correspondence Analysis (MCA) for qualitative variables.   While a number of the model outputs can be intrepreted in a similar fashion as in PCA, MFA allows variables to be grouped.   Thus, we can explore the relations between individuals, variables and groups of variables.
 
-```{r}
+An exposition of the mathematical background of MFA is too lengthy to include here.
+ I refer the reader to the online course on PCA, MCA, MFA taught by [Francois Husson](https://husson.github.io/MOOC.html#AnaDoGB) and the textbook by Jerome Pages and Francois Husson, "Exploratory Multivariate Data Analysis by Example Using R",(http://factominer.free.fr/course/books.html)
+They also implement and support the software package `FactoMineR` and `FactoShiny` used herein.
 
-select_cols = c("fSex", "fRace", "Age", "Education", "Alcohol", "THC", "Cocaine",
-                "Stimulants", "Sedative.hypnotics", "Opioids", "fCO", "fHViol" , "fDCond" ,
-                "fSuic" , "fNonDx" , "fSubsDx" , "fAbuse" , "ADHD.Total" , "MD.Q3" ,
-                "MD.TOTAL" )
+In the next section, I describe the model setup and the mapping of variables into groups.  Afterwards, I report my findings at overall performance of the MFA model and the contribution of groups of variables   Then, I go deeper into the individuals looking at how the biplot separates the individuals by gender, race and behavioral categories.  Then, I go deeper into the variable correlations and loadings on the MFA dimensions.
 
+## Model Setup
 
-test_cols = c("fSex", "fRace", "Age", "Education",  "fCO", "fHViol" , "fDCond" ,
-                "fSuic" , "fNonDx" , "fSubsDx" , "fAbuse" , "ADHD.Total" ,  "MD.TOTAL" )
+To run MFA, we need to group the variables by type:  __quantitative__ or __qualitative__ and by role: __active__ or __supplementary__.   __Active__ means the variable is used in estimating the MFA factors.   __Supplementary__ means the variable is not used to calculate the MFA dimensions but its values are fitted ex-post into the MFA dimensions for interpretative context of the __active__ variables.
 
-ab_test = ab[, test_cols ]
-
-ab_lesscols = ab[,select_cols ]
-
-colnames(ab_lesscols)
-
-```
-
-## FactoMineR MFA Analysis
-
+A variable group consists of a set of columns of the dataset of one *type* and one *role*.   We are required to partition all variables into groups.  MFA requires at least 2 groups to be run.   For each group, a PCA analysis is run - either on the actual values for a quantitative group or on a 0-1 matrix of dummy variables for a qualitative group. 
+ 
 ```{r factorminer-load}
 library(FactoMineR)
 library(factoextra)
 
 ```
 
-We run a MFA analysis using a smaller set of data and variables.   First we using only 14 variables divided into 5 groups.
 
-The groups and their member variables are listed below:
-
-   1.  **SexRace**  fSex,  fRace    __qualitative__
-   2.  **AgeEdu**    Age, Education __quantitative__ ,  __scaled__
-   3.  **Vio**       fCO,  fHViol,  fDCond, fSuic  __qualitative__
-   4.  **Dx**          fNonDx,  fSubsDx  __quantitative__, __scaled__
-   5.  **Mood**      Abuse,  ADHD.Total,  MD.TOTAL  __quantitative__, __scaled__
-
-```{r}
-
-newDF <- ab_test[,c("fSex","fRace","Age","Education","fCO","fHViol","fDCond","fSuic","fNonDx","fSubsDx","fAbuse","ADHD.Total","MD.TOTAL")]
-res.MFA<-MFA(newDF,group=c(2,2,4,2,1,2), type=c("n","s","n","n","n", "s"),name.group=c("SexRace","AgeEdu","Vio","Dx","Abuse", "Mood"),graph=FALSE)
-```
-
-```{r}
-plot.MFA(res.MFA, choix="ind",lab.par=TRUE,invisible= c('quali','quali.sup'),select='contrib  53',habillage='fSuic',title="Individual factor map",cex=0.85,cex.main=0.85,cex.axis=0.85)
-```
-
-The above plot overlays Suicide on the individual observations in the MFA plot of first and second MFA dimensions.  These two axes have the highest explanatory power of the data variance.   It shows that the majority of Suicide = Yes reports occurs in the upper right hand quadrant.  This means the MFA axes do a good job of separating the Suicide and non-Suicide patients using an MFA analysis.
+We consider an MFA analysis on the complete set of variables excluding  the variables  `ADHD.Total` and `MD.TOTAL` which are sums of survey scores.
+Since MFA can handle individual survey scores, we prefer to use those columns to have more granular insights.  Excluding those totals avoids linear dependencies and zero eigenvalues in the MFA.
 
 
-```{r}
-plot.MFA(res.MFA, choix="var",select='contrib 7',habillage='group',title="Correlation circle",cex=1.15,cex.main=1.15,cex.axis=1.15)
-plot.MFA(res.MFA, choix="group",cex=1.35,cex.main=1.35,cex.axis=1.35)
-plot.MFA(res.MFA, choix="axes",ncp=3,habillage='group')
+```{r amfa1-create}
 
-
-
-```
-## MFA
-
-Do an MFA analysis on the complete
-
-```{r}
 
 amfa1 = ab %>% dplyr::select( -one_of("ADHD.Total", "MD.TOTAL") )
 
-colnames(amfa1)
+# Presenting the table of variables in the dataframe is only needed for initial setup
+
+bb = summary.default(amfa1) %>% as.data.frame() %>% dplyr::group_by(Var1) %>% tidyr::spread(key=Var2, value=Freq ) 
+
+bb$idx = seq.int(1,nrow(bb))
+
+#bb %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover"))
 
 ```
+
+Our dataset `amfa1` will be used in the MFA analysis.  It has 50 variables and 171 observations.
+
+```{r}
+dim(amfa1)
+```
+
+We partition the variables into 8 groups as shown in the table below.  They are 4 groups of active quantitative variables and 2 groups of active qualitative variables and 2 groups of supplementary qualitative variables.
+
+```{r amfa1-vars-df}
+
+amfa1_vars_df = data.frame( 
+  GroupName =c('AE', 'Abuse' ,   'Vio', 'Dx' ,'ADHD' ,'MD', 'Sub', 'Demo' ) ,
+  Type = c('Active', 'Supp',     'Active', 'Active', 'Active', 'Active', 'Active', 'Supp') ,
+  Role = c('scaled', 'nominal',  'nominal', 'nominal' , 'scaled', 'scaled', 'scaled' , 'nominal' ) ,
+  NumVars = c( 2, 1, 4, 2, 18, 15, 6, 2 ) ,
+  Variables = c( 'Age, Education', 'fAbuse', 'fCO, fHViol, fDCond, fSuic', 'fNonDx, fSubsDx', 'ADHQ.Q1 ... ADHD.Q18' ,
+                 'MD.Q1a, ... MD.Q1m, MD.Q2, MD.Q3', 'Alcohol, THC, Cocaine, Stimulants, Sedative.hypnotics, Opioids',
+                 'fSex, fRace' )
+  
+) 
+
+amfa1_vars_df %>% kable(caption="MFA Variable Groups") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+
+We choose to assign `fSex`, `fRace`, `fAbuse` as supplementary variables.  Omitting potentially sensitive data like Race, Sex and Abuse
+may be beneficial in machine learning applications.   Secondly, they may give insight into well the model separates individuals by other variables.
+If the model is accurate, the omitted variables should also be separated by the MFA analysis.
+
+
+```{r amfa1-model1}
+res.amfa1<-MFA(amfa1,group=c(2,1,4,2,18,15,6,2),type=c('s','n','n','n','s','s','s','n'),name.group=c('AE', 'Abuse' ,'Vio', 'Dx' ,'ADHD' ,'MD', 'Sub', 'Demo' ),num.group.sup=c(2,8),graph=FALSE)
+
+```
+
+
+## Model Performance
+
+### Scree Plot
+
+Due to the diversity of survey data, the dimension reduction does not dramatically explain most of the variance with 2 or 3 dimensions.  That is, there is no sharp "elbow" in the scree plot of the MFA dimensions below.
+The first 2 dimensions capture 11.4% and 10.9% of the variance respectively.
+The first 10 dimensions are required to explain 65.2% of the cumulative variance.  
+
+```{r}
+# Scree plot
+
+fviz_screeplot(res.amfa1)
+
+head(res.amfa1$eig, n=10) %>% kable(caption="Eigenvalues of MFA", digits = 1) %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+
+### Group Plot
+
+Next we define and explain the group plot results.  The group plot represents the $J$ variable groups as points on a unit square.  The X-axis represents MFA dimension 1 - represented by the vector $v_1$ and Y-axis represents MFA dimension 2 - with vector $v_2$.  The variable groups $K_1, \cdots , K_J$ would be the 8 groups previously set up.
+
+The group plot below shows a statistic $L_g(K, v_i)$ for MFA principal components $v_1, v_2$.   $L_g$ is the projected inertia of the variables in group $K$ on $v_i$ divided by the largest eigenvalue of PCA on group $K$.   More formally,
+
+$$ L_g(K_j, v_1) = \frac{1}{\lambda_{1}^{j}} \sum_{k \in K_j} cov^2(x_k, v_1)$$
+
+In fact, MFA defines the first principal component $v_1$ to maximize $L_g$ over all variable groups.
+
+$$\underset{v_1 \in R^I}{\operatorname{arg max}} \sum_{j=1}^{J} L_g(K_j,v_1)$$
+
+We know that $0 \leq L_g(K,v_1) \leq 1$ because the projected inertia is bounded by the largest eigenvalue $\lambda_{1}^{j}$.  When $L_g(K_j,v_1)=0$, the variable group is uncorrelated to the first MFA dimension.  When $L_g(K_j,v_1)=1$, the variable group is perfectly correlated with the first MFA dimension.
+
+
+The group plot tells us:
+
+* `AE` (Age, Education) group is somewhat projected to dimension 1 but not projected to dimension 2.
+* `Dx`, `Sub`, and `Vio` groups are somewhat projected to dimension 1 and weakly projected to dimension 2.
+* `Demo`, `Abuse` are not projected to dimension 1 and weakly projected to dimension 2.
+* `ADHD` is not projected to dimension 1 but strongly projected to dimension 2.
+* `MD` is weakly projected to dimension 1 and strongly projected to dimension 2.
+
+In brief, the survey responses to ADHD and Mood are strong descriptors but play a secondary role because Age, Education, Drugs, Substance and Violence features explain more of the variation.
+
+
+```{r amfa1-groupplots}
+# Groups representation
+plot.MFA(res.amfa1, choix="group")
+
+```
+
+### Qualitative Variables Biplot
+
+In the following biplot, we show the barycenters of all active qualitative (categorical) variable values.  
+The coordinates of a barycenter are the means of the individuals coordinates along MFA dimensions 1 and 2 respectively.
+
+
+For example, we highlighted the values of `fSuic` as $\color{green}{\text{`fSuic_Yes`}}$ and 
+$\color{red}{\text{`fSuic_No}}$.   We observed that individuals who answered yes to the attempted Suicide question are centered in the upper right corner (i.e. Quadrant I) while those who answered no to the attempted Suicide question are centered in Quadrant III.  
+
+
+When the barycenters of a categorical variable's values are far apart, our MFA is using the categorical value in defining the principal axes.
+
+```{r active-qual-barycenter}
+
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('ind', 'quali.sup'),habillage='fSuic', select='contrib  10',title="Qualitative Categories Barycenters", cex=.9)
+
+```
+
+The Barycenters plot suggests:
+
+* Violence related variables have barycenters separated by the origin with No categories for history of violence, suicide, court order in Quadrant III while their Yes responses are centered on upper Quadrant I.
+* `SubsDx`  is well separated.  It takes 4 categorical values.  Individuals with `SubsDx=0` are located in left of Quadrant II while those with `SubsDx=1,2,3` are clustered in lower right half.   We cannot readily distinguish degrees of `SubsDx` among 1,2 or 3.  
+* `NonDx` is well separated but its quadrant orientation is flipped with `SubsDx`.  It is worth investigating why Non-substance related Dx use is opposite of Substance-related Drug use.   Examining the contingency table of non-substance related drug use vs. substance related drug use, we see not using Non-substance drug use is strongly associated with substance-related drug use.
+
+```{r}
+cbind( NonDrugUse = c("0", "1", "2") , table(amfa1$fNonDx, amfa1$fSubsDx) ) %>% kable() %>% 
+  add_header_above(c(" " = 2, "Substance-related Dx Use" = 4)) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+### Correlation Circle
+
+
+The following plot shows the correlations of each quantitative variable $X_j$ to the MFA dimension 1 and 2 vectors $v_1$ and $v_2$.
+That is, $x(X_j) = cor(X_j, v_1)$ and $y(Y_j)=cor(X_j, v_2)$.
+
+There are 4 active quantitative variable groups.  Each group is assigned its own color and all member variables in a group are plotted on the circle.
+Hence it is a little busy to see the position of each survey question variable on the below circle plot.
+
+
+```{r amfa1-correlation-var}
+
+plot.MFA(res.amfa1, choix="var",habillage='group',title="Correlation circle")
+
+```
+
+However, we can draw several conclusions:
+
+* ADHD survey responses are all strongly correlated to each other and to MFA dimension 2.
+* MD survey responses are more dispersed but still well correlated to MFA dimension 2.
+* Substance use is quite dispersed but positively correlated to MFA dimension 1.  Of these, THC, Cocaine are dominant.  Stimulants and Sedative.hypnotics are not well projected to MFA $v_1$ or $v_2$.
+* Age and Education are negatively but moderately correlated to MFA dimension 1.
+* Substances like THC and Cocaine are positively correlated to each other and MFA dimension 1 but somewhat negatively to dimension 2.
+
+
+## Intepreting the Principal Components
+
+Now we examine the granular variable interaction with the first two principal components of the MFA.
+Our goal is to interprete the two principal axes based on interpretation of the variables in their business domain.
+
+### Dimension 2 - Survey Information
+
+Previously, we observed that ADHD and MD questions projected meaningfully onto the 2nd MFA dimension but not the first.
+Here, we will look at their correlations and covariances in detail.
+
+The plot below displays the percentage contribution  of each variable to the covariance with MFA dimension 2
+and its correlation to the same.   We rank the variables in the table and show the top 5 and bottom 5 variables.
+Thus, we will see which survey questions have the greatest explanatory power.
+
+The table and chart show the most important ADHD survey questions are:
+
+  * ADHD.Q8 
+       + 70% correlation
+       + 2.91% of explained covariance
+       + "How often do you have difficulty keeping your attention when you are doing boring or repetitive work?"
+       
+  * ADHD.Q10 
+       + 67% correlation
+       + 2.7% of explained covariance
+       + "How often do you misplace or have difficulty finding things at home or at work?"
+       
+  * ADHD.Q7 
+       + 66%  correlation
+       + 2.56% of explained covariance
+       + "How often do yo make careless mistakes when you have to work on a boring or difficult project?"
+  
+In general, all ADHD question variables are consistently projected and significant.
+
+Some MD questions are also important and significantly projected but *not* consistently.
+
+  * MD.Q1g 
+       + 69% correlation
+       + 4.67% of explained covariance is most important
+       + "...you were so easily distracted by things around you that you had trouble concentrating or staying on track
+       
+  * MD.Q2  
+       + 62% correlation
+       + 3.76% of explained covariance
+       + "... have several of these ever happened during the same period of time?"
+       
+  * MD.Q1b 
+       + 59% correlation
+       + 3.41% of explained covariance
+       + "... you were so irritable that you shout at people or started fights or arguments?"
+
+However, some MD survey questions had no correlation to the MFA dimension 2 and may be ineffective predictors of related variables.
+
+   * MD.Q1c
+       + 7.7% correlation
+       + 0.06% of explained covariance
+       + "... you felt much more self-confident than usual?"
+
+
+```{r dim2-var-contrib}
+mfa_var_cor = res.amfa1$global.pca$var$cor[,2]
+mfa_var_contrib= res.amfa1$global.pca$var$contrib[,2] 
+
+df_dim2 = data.frame( mfa_var_cor, mfa_var_contrib)
+
+```
+
+```{r influential-survey-questions}
+
+# Influential Survey questions
+df_dim2 %>% ggplot(aes(x=mfa_var_contrib, y=mfa_var_cor, label=rownames(df_dim2))) + 
+  ggtitle("Dim 2 - Variables Correlations-Explained Covariance") +
+  xlab("% Explained Covariance") + ylab("correlation to Dim 2") +
+  geom_point() + geom_text_repel()
+```
+
+
+```{r influential-survey-extremum}
+df_dim2 %>% arrange(desc(mfa_var_cor)) %>% filter( row_number() > max(row_number()) - 5 | row_number() <= 5 ) %>% 
+  kable(digits=2, col.names = c("Corr", "Var-Cntrb"), caption="Dim 2 - Corr/Covar%" ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+
+### Dimension 1 - Education, Substances and Conduct
+
+
+
+```{r influential-social-features}
+
+df_dim1 = data.frame( cor = res.amfa1$global.pca$var$cor[,1], pct = res.amfa1$global.pca$var$contrib[,1] )
+
+df_dim1%>% ggplot(aes(x=pct, y=cor, label=rownames(df_dim1))) + 
+  ggtitle("Dim 1 - Variables Correlations-Explained Covariance") +
+  xlab("% Explained Covariance") + ylab("correlation to Dim 1") +
+  geom_point() + geom_text_repel()
+
+```
+
+
+```{r influential-ag-extrema}
+df_dim1 %>% arrange(desc(cor)) %>% filter( row_number() > max(row_number()) - 5 | row_number() <= 5 ) %>% 
+  kable(digits=2, col.names = c("Corr", "Var-Cntrb"), caption="Dim 1 - Corr/Covar%" ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+
+```
+
+
+### Interpretation
+
+Our earlier two subsections gives us information to interprete the first two principal components of the MFA.
+
+The first MFA principal component $F_1$ appears to differentiate:
+   
+   * Substance related Drug Use  $F_1 > 0$ is Yes vs.  $F_1 < 0$ is No.
+   * Education                 $F_1 > 0$ has low education vs.  $F_1 < 0$ has high education.
+   * THC                       $F_1 > 0$ uses Marijuana vs. $F_1 < 0$ does not use Marijuana.
+   * Age                       $F_1 > 0$ is younger vs. $F_1 < 0 $ is older
+   * Disorderly Conduct         $F_1 > 0$ has been disorderly vs.  $F_1 < 0$ has not been disorderly
+   * MD Q1a                     $F_1 > 0$ can get hyper vs. $F_1 < 0 $ does not get hyper and into trouble.
+   
+The second MFA principal component $F_2$ appears to differentiate on the survey questions and mood related behavior.
+
+   * Suicide attempts     $F_2 > 0$ is Yes  vs. $F_2 < 0$ is No.
+   * MD Q1g can't concentrate: $F_2 > 0$ is Yes vs. $F_2 < 0$ is No.
+   * ADHD Q8 can't pay attention when bored: $F_2 >0$ is Yes vs. $F_2 < 0$ is No.
+
+## Analysis of Individuals
+
+Plotting the data cloud of individuals on the first 2 dimensions of an MFA analysis can provide
+important information about the predictive or discriminatory power of model which we may not see in the
+earlier plots.  For each individual, we plot their coordinates on the MFA dimension 1 and 2 axes in a scatter plot.
+
+If we color code each individual point by their value $k$ of category $K_j$ then we can test if the points are clustered in the biplot for any value $k$.   This will imply that the MFA dimensions 1 and 2 can separate those individuals by category $K_j$ 
+and potentially yield additional meaningful predictions.
+
+
+
+```{r eval=FALSE}
+# To plot and examine data for 7 paragon individuals
+# ------------------------------------------------
+ fviz_mfa_ind(res.amfa1, select.ind = list(name=c(88,2, 18, 59, 141, 114, 84 ) ), invisible='quali.var')
+
+# Choose some representative individuals from the survey based on their alignment with MFA Dimensions 1 and 2
+t( data.frame( Subject=c(88,2, 18, 59, 141, 114, 84 ),  Dim = c('West', 'NorthWest', 'North', 'NorthEast', 'East', 'South', 'SouthWest'), amfa1[c(88, 2, 18, 59, 141, 114, 84), c(1:9,10:19,28:34,43:45,49:50)] ) ) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+
+### Suicide, History of Violence and Disorderly Conduct
+
+We examine the `Viol` group of categorical variables first.  Do the MFA dimensions differentiate by these variables?
+The answer is $\color{blue}{\text{Yes!}}$   
+
+In the biplot below "Individuals by Suicide Attempt", the green dots represents
+who attempted suicide.  We see the green dots fall mostly *above* the $X$-axis and slightly concentrated on the right plane.
+Thus, Dimension 2 appears to differentiate by attempted suicide.
+
+
+```{r amfa1-suicide}
+
+# Graphs
+# Individuals Suicide
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali','quali.sup'),select='contrib  171',habillage='fSuic',title="Individuals by Suicide Attempt")
+
+```
+
+
+In the biplot below "Individuals by Court Order", the green dots represents
+who obtained or received Court Orders.  We see the green dots fall mostly on the right half plane.
+Thus, Dimension 1 appears to differentiate by Court Order = Yes but not when Court Order = No.
+
+
+
+```{r amfa1-CO}
+
+# Individuals categorized by Court Order
+# fCO = Yes strongly concentrated on right half plane.
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali','quali.sup'),select='contrib  171',habillage='fCO',title="Individuals by Court Order")
+```
+
+
+In the biplot below "Individuals by History of Violence", the green dots represents
+who obtained or received Court Orders.  We see the green dots fall mostly on the right half plane but some points falls into part of the left half plane.
+Thus, Dimension 1 appears to partly differentiate by when `fHViol=Yes`.
+
+
+
+```{r amfa1-HViol}
+# Individuals categorized by History of Violence
+# fHViol_Yes concentrated on right half plane.
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali','quali.sup'),select='contrib  171',habillage='fHViol',title="Individuals by History of Violence")
+```
+
+The majority of survey participants engaged in disorderly conduct.   Dimension 1 is effective in differentiating those who did not engage in disorderly conduct.  Those who did not engage in disorderly conduct fall in the left side of the plot.
+
+
+```{r amfa1-DCond}
+# Indivduals categorized by Disorderly conduct
+# fDCond=No is concentrated on left half plane
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali','quali.sup'),select='contrib  171',habillage='fDCond',title="Individuals by Disorderly Conduct")
+```
+
+
+### Supplemental Variables:  Race, Gender and Abuse
+
+Moving to the supplemental qualitative variables, we will conclude that MFA has little or no ability to differentiate by these categories.  We see below that Whites and Blacks are roughly evenly distributed across the biplot.  There is no clear visual evidence that MFA can differentiate by Race along dimensions 1 and 2.  However, remember that supplementary variables are not used in calibrating the MFA model.
+
+
+```{r amfa1-race}
+
+# Individuals categorized by Race
+# Blacks and Whites well dispersed across the four quadrants
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali','quali.sup'),select='contrib  171',habillage='fRace',title="Individual by race")
+```
+
+
+Women seem to be more heavily concentrated in the upper half plane.  Thus, MFA dimension 2 may somewhat differentiate by `Sex`.
+
+```{r amfa1-sex}
+# Individuals categorized by Sex
+# Females concentrated in upper half plane
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali','quali.sup'),select='contrib  171',habillage='fSex',title="Individual by Sex")
+```
+
+Abuse is relatively challenging to visualize because it has 8 levels of data.  We observe no obvious patterns to help differentiate Abuse levels.  This is consistent with the low projection of Abuse in the previous Groups plot.  Both the individuals biplot and the simpler barycenter biplot don't make much sense.  In the latter, the barycenters of the levels of Abuse show no pattern or trend.
+
+
+```{r amfa1-Abuse}
+# Factor Plot by Supplementary Categories
+# fAbuse has levels 0-7.   Barycenters are plotted.  Abuse = 1, 2, 7 are in upper right  half.  Abuse = 0 is in lower half near y axis
+#
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('ind','quali'),select='contrib  171',habillage='fAbuse',title="Abuse by Individual")
+
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali'),select='contrib  171',habillage='fAbuse',title="Abuse by Individual")
+
+```
+
+
+
+### Drug Use
+
+There is strong evidence that Non-substance related drug use is differentiated by the model by not on the principal axes but a tilted version of Dimension 2.   In the plot below, those who responded No to Non-substance related drug use fall mostly on the right half plane.  Thus, Dimension 1 has significant power to differentiate that group.  However, for responses of 1 and 2, those individuals are intermixed in the left half plane.
+
+
+```{r amfa1-NonDx}
+
+# Individuals categorized by NonDx
+# NonDx = 0 clustered on right half plane.
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali','quali.sup'),select='contrib  171',habillage='fNonDx',title="Individual by Non-Substance related Drug Use")
+
+```
+
+
+The plot below shows some clustering of No responses to Substance related Drug Use in the left half plane. Thus Dimension 1 has some ability to differentiate but the cluster boundary looks tilted.
+
+```{r amfa1-SubsDx}
+
+# Individuals categorized by SubsDx
+# no SubsDx use clustered in left side, SubsDx=1 in middle y-axis,  SubsDx=2 in Right half plane, SubsDx=3 is middle and Right vertical half plane
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali','quali.sup'),select='contrib  171',habillage='fSubsDx',title="Individuals by Substance Related Drugs")
+
+```
+
+```{r eval=F}
+# These are really useful statistics
+
+res.amfa1$group$contrib %>% kable(digits = 1)
+
+res.amfa1$group$RV %>% kable(digits = 2) %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+
+## MFA Wrap-up
+
+The use of MFA in analyzing this mental health dataset has been successful in our opinion.
+The ability to handle both quantitative and qualitatively data in a coherent framework means we don't have
+to shoehorn qualitative data into a quantitative form.   The findings show that mental health responses on ADHD and Mood are secondary to the demographic, education and drug or substance usage  and impulsiveness of the individual.
+Lastly, the ability to differentiate by attempted suicide bodes well for our prediction model using Support Vector Machine.
 
 
 # Appendices

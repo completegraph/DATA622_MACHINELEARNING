@@ -35,6 +35,8 @@ library(kableExtra)
 library(dplyr)
 library(readxl)
 
+
+
 library(caret)    # Model Framework
 library(skimr)    # Used for EDA
 library(klaR)     # Implemented KNN and Naive Bayes models, etc
@@ -42,6 +44,9 @@ library(class)    # used for KNN classifier
 
 # PLEASE ADD YOUR R LIBRARIES BELOW
 # ------------------------------
+library(janitor)  # used for tabyl function
+library(RColorBrewer)  # for ggplot
+
 
 # ---------------------------------
 knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
@@ -66,15 +71,15 @@ This document discusses analyses of a mental health data set.
 **Section 1** conducts exploratory data analysis and data wrangling on the dataset.  
 We obtain a dataset with imputed values and omitted rows and columns. The author is Alexander Ng.
 
-**Section 2** contains an analysis with hierarchical clustering and k-means analysis. The author is Alexander Ng (primary).
+**Section 2** contains an analysis using a multiple factor analysis (MFA) which is a generalization of principal components analysis (PCA).  The author is Alexander Ng.
 
-**Section 3** contains an analysis using a multiple factor analysis (MFA) which is a generalization of principal components analysis (PCA).  The author is Alexander Ng.
+**Section 3** contains an analysis with hierarchical clustering and k-means analysis. The author is Alexander Ng.
 
 **Section 4** contains an analysis using a support vector machine (SVM) approach using suicide as the response variable.  The authors are Philip Tanofsky and Scott Reed.
 
 **Section 5** contains a supplementary analysis using binary logistic regression as a baseline model to evaluate the SVM results and contains additional conclusions.   The author is Randall Thompson.
 
-**Section 6** presents our `R` code and technical appendices and references.   The document was merged and edited by $\color{red}{\text{TBD}}$.
+**Section 6** presents our `R` code and technical appendices and references.   The document was merged and edited by Randall Thompson.
 
 # Exploratory Data Analysis
 
@@ -942,6 +947,281 @@ The ability to handle both quantitative and qualitatively data in a coherent fra
 to shoehorn qualitative data into a quantitative form.   The findings show that mental health responses on ADHD and Mood are secondary to the demographic, education and drug or substance usage  and impulsiveness of the individual.
 Lastly, the ability to differentiate by attempted suicide bodes well for our prediction model using Support Vector Machine.
 
+# Clustering: K-Means and Hierarchical
+
+K-means clustering is a standard method of unsupervised machine learning to identify groups of interest.   We will apply it to analyze the mental health dataset previously considered using MFA.  In fact, we will build on the data preparation phase earlier and use the MFA analysis to interpret the K-means cluster results in this section.  This analysis proceeds as follows.  First, we adapt the previously used dataset for k-means clustering.  Second, we tune the k-means clustering for different values of $k$.  We choose $k=4$ as the optimal number of clusters.  Third, we evaluate the cluster characteristics by visual inspection of their convex hulls and statistical tabulation of numerical properties.   Using this information, we propose and label the 4 cluster profiles.
+
+## Data Preparation
+
+The `kmeans` function has some requirements that differ from the MFA functionality in `FactoMineR` which requires modification to the cleaned dataset used previously.  `kmeans` requires scaled numerical data.  Hence categorical variables have to be omitted (in some cases) or converted to numerical scores.
+
+We omit the use of `fRace`, `fSex` as in the MFA analysis due to political concerns in the cluster construction.  We omit the use of `fAbuse` because it proved uninformative in the MFA analysis.  We omit the use of the survey total scores called `ADHD.Total` and `MD.TOTAL` because we retain their individual scores.
+
+Lastly, all quantitative variables are scaled to mean 0, variance 1 variables stored in a dataframe `kmdfs`.
+
+
+```{r kmdf1}
+
+library(cluster)
+library(factoextra)
+
+kmdf1 = ab %>% dplyr::select( -one_of("ADHD.Total", "MD.TOTAL") ) %>%
+          mutate( nCO       =    ifelse(fCO=="Yes", 1 , 0 ) ,
+                  nHViol    =    ifelse(fHViol == "Yes", 1, 0 ) ,
+                  nDCond    =    ifelse(fDCond == "Yes", 1, 0 ) ,
+                  nSuic     =    ifelse(fSuic == "Yes", 1, 0 ) ,
+                  nNonDx    =    as.integer(fNonDx) - 1 ,
+                  nSubsDx   =    as.integer(fSubsDx) - 1  ) %>%
+dplyr::select( -one_of("fCO", "fHViol", "fDCond" , "fSuic", "fNonDx", "fSubsDx"  ) ) %>%  # Remove factor version
+dplyr::select(-one_of("fAbuse", "fRace", "fSex"))   # Remove political sensitive categories and Abuse
+
+                
+kmdfs =  kmdf1 %>%  mutate_if(is.numeric, scale )
+
+#head(kmdfs) %>% kable(caption="Scaled K-Means DataSet" ,  digits = 2 ) %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+
+Looking at the distance matrix using the `fviz_dist` function in the `factoextra` package we see the variation
+in distances on the dataframe of observations.
+
+```{r distance-matrix}
+
+distance <- get_dist( kmdfs )
+
+fviz_dist(distance, gradient = list(low="#00AFBB", mid="white", high="#FC4E07" ) )
+
+
+```
+
+## Optimal Selection of Number of Clusters
+
+The optimal selection of $k$ is more art than science.  The mental health dataset appears to have high dimensionality so I prefer to use only a few clusters than many.  This allows profiles to be easier to construct and interpret.  
+
+However, we wish to also confirm our intuition with objective approaches to cluster selection.   The two approaches we use are:
+
+   * visual inspection of data clusters plotted against their PCA dimensions 1 and 2  (i.e. on a biplot)
+   * statistical measures of cluster optimization.  We use three: Elbow, Silhouette and Gap.
+
+We invoke the `kmeans` algorithm with $k=2,3,4,5,6$ clusters.   Following the guidance in the [UC Business Analytics R Programming Guide](https://uc-r.github.io/kmeans_clustering) we choose to use `nstart=25` restarts and the traditional Euclidean distance on the dataset.   Restarts are needed in order to mitigate bad random selection of the initial starting centroids.   Within `kmeans` the clusters chosen by each restart are assessed to ensure the best fit.
+
+The below grid shows the 5 model variants.  None of the cluster models seem to find natural boundaries between clusters.   For example, the $k=5$ cluster model had significant overlap between the convex hulls of the green (3) and red (1) clusters.   Only $k=2$ cluster model shows full separation of points by convex hull.  
+
+Looking at the plots below, it seems clear that $k=3$ and $k=4$ are the best candidates.  They have the best balance in non-overlap of convex hulls and naturalness of grouping.
+
+
+```{r kmeans-modelrun}
+
+set.seed(105)
+
+k2 = kmeans(kmdfs, centers = 2 , nstart = 25 )
+k3 = kmeans(kmdfs, centers = 3 , nstart = 25 )
+k4 = kmeans(kmdfs, centers = 4 , nstart = 25 )
+k5 = kmeans(kmdfs, centers = 5 , nstart = 25 )
+k6 = kmeans(kmdfs, centers = 6 , nstart = 25 )
+
+p2 = fviz_cluster(k2, data = kmdfs, geom="point") + ggtitle("k=2")
+p3 = fviz_cluster(k3, data = kmdfs, geom="point") + ggtitle("k=3")
+p4 = fviz_cluster(k4, data = kmdfs, geom="point") + ggtitle("k=4")
+p5 = fviz_cluster(k5, data = kmdfs, geom="point") + ggtitle("k=5")
+p6 = fviz_cluster(k6, data = kmdfs, geom="point") + ggtitle("k=6")
+
+
+library(gridExtra)
+
+grid.arrange(p2, p3, p4, p5, p6, nrow=3)
+
+```
+
+Looking next at the optimal selection of cluster counts, we use the algorithms contained in `factoExtra` and `cluster`.   
+
+*  The Elbow method clearly shows an inflection point at $k=4$ but not at $k=3$.  It seeks to  minimize the within-cluster total variation.   
+*  The Silhouette method suggests $k=2$ and the optimal number of clusters.  [Wikipedia](https://en.wikipedia.org/wiki/Silhouette_(clustering)) has a good technical discussion of the method but the algorithm can be run without knowledge of the theory.  I find $k=2$ too small because there are definitely more than 2 profiles of participants based on the MFA analysis.
+*  The gap statistic is invented by Tibshirani, Walther and Hastie and compares the dataset against a simulated dataset with no cluster.   The gap method suggest an optimal value of $k=7$.
+
+
+```{r km-optimal-cluster-search}
+# Optimal cluster search
+
+set.seed(123)
+
+pdiag1 = fviz_nbclust(kmdfs, kmeans, method="wss") + ggtitle("Elbow Method") + theme(aspect.ratio = 1/3)
+
+
+
+pdiag2 = fviz_nbclust(kmdfs, kmeans, method="silhouette") + ggtitle("Silhouette Method")+ theme(aspect.ratio = 1/3) + xlab("")
+
+
+gap_stat <- clusGap(kmdfs, FUN = kmeans, nstart= 20, K.max = 10, B = 50)
+
+
+pdiag3 = fviz_gap_stat(gap_stat) + ggtitle("Gap Method")+ theme(aspect.ratio = 1/3) + xlab("")
+
+
+grid.arrange(pdiag1, pdiag2, pdiag3, nrow=2)
+
+```
+
+Finally, we decide to adopt $k=4$ as the best number of clusters balancing the challenge of finding credible labels for each cluster with objective methods.  Now we have to consider how to make sense of the clusters.
+
+
+```{r km-finalmodel}
+
+# Final k-means model to adopt
+
+kmfinal = k4
+
+
+```
+
+
+
+## Analysis of K=4 Means Clusters
+
+We analyze the clusters visually by drawing their convex hulls on two biplots.  There are 3 findings.
+
+*  The first biplot uses the coordinates of the points on the MFA dimensions 1 and 2.  Note that the k-means clustering algorithm did not use the same dataset or weighting scheme as MFA so we don't expect perfect concordance.
+
+*  The second biplot compares the k-means clusters on PCA principal axes built using the same dataset.   Notice that the convex hulls have less overlap.
+
+*  More importantly, the groups have been rotated by 90 degrees.  For example, cluster 1 (the smallest with 19 individuals) which is colored red in both biplots has rotated 90 degrees.   In the PCA biplot, cluster 1 is in the South.  In the MFA biplot, cluster 1 is in the West.  This suggests that the PCA dimensions emphasize the survey questions on dimension 1 whereas the MFA analysis prioritized Age, Education and lifestyle factors instead.  The difference is likely a consequence of the different weighting schemes of the PCA.
+
+
+```{r convexhull-biplot}
+
+p4 + ggtitle("K=4 Cluster Interpretation", subtitle = "Mapped to PCA Components") + theme(aspect.ratio = 1)
+
+
+# If you need to install ggConvexHull - need to go to devtools and github
+#library(devtools)
+#devtools::install_github("cmartin/ggConvexHull")
+
+library(ggConvexHull)
+amfa1_xy = data.frame( x = res.amfa1$global.pca$ind$coord[,1], y = res.amfa1$global.pca$ind$coord[,2] ,
+                       lab = as.factor(kmfinal$cluster) )
+
+ggplot(data=amfa1_xy, aes(x=x,y=y)) + geom_point(aes(col=lab)) +  scale_color_brewer(palette = "RdYlBu") + xlab("MFA Dim 1") + ylab("MFA Dim 2") + labs(title="Cluster Interpretation", subtitle="K-Means Clusters mapped to MFA Components")  + geom_convexhull(alpha = 0.3, aes(fill = lab)) + theme(aspect.ratio = 1)
+
+
+```
+
+
+Looking at the within-cluster means of the quantitative variables can help us characterize each cluster.  We show the quantitative variables on the table below.  The top row header (in red) shows the cluster number from 1 to 4.
+
+The key observations from the below table are:
+
+* `ADHD.TOTAL` is very different for each group.  From low to high, Group 2 (Low), Group 4 (Medium), Group 1 (High) and Group 3 (Very High) have ADHD problems.   `MD.TOTAL` also shows differentiation.  It strongly differentiates Group 2 vs. Group 3.  Note that Group 3 has uniformly high scores while Group 2 has uniformly low scores on both surveys.
+
+*  Illegal drug use `Cocaine` and `THC` differentiates Group 1 vs. Groups 2, 3, and 4.
+
+*  Disorderly conduct `fDCond` differentiates Group 1 from Group 4.  While it is high for Group 2 and 3.
+
+
+```{r kmjoin-transpose}
+
+
+kmjoin = cbind( amfa1_xy , ab )
+
+
+kmsummary = kmjoin %>% group_by(lab) %>% summarize_if(is.numeric, "mean") %>% mutate_if(is.numeric, round, digits = 2) %>%
+  dplyr::select( lab, x, y, Age, Education, ADHD.Total, MD.TOTAL,  ADHD.Q8, ADHD.Q10, ADHD.Q7, ADHD.Q9, MD.Q1g, 
+          MD.Q2, MD.Q1b, Alcohol, THC, Cocaine)
+
+t(kmsummary) %>% kable(caption="Cluster Averages for Mental Health Data") %>% kable_styling(bootstrap_options = c("striped", "hover", "bordered"), fixed_thead = T) %>% row_spec(1, bold = T, color = "red")
+
+```
+
+
+The following contingency tables show the cluster groups in each column and the counts and within-cluster frequency of each category.
+We report tables for sex, race, attempted suicide, history of violence, disorderly conduct, substance use, non-substance drug use and will discuss the findings in the next section as we describe cluster profiles.
+
+```{r}
+
+
+kmjoin %>% tabyl(fSex, lab) %>% adorn_totals("row") %>% adorn_percentages("col") %>% adorn_pct_formatting(digits=0) %>% adorn_ns() %>% kable(caption = "Gender vs K=4 Means Clusters") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+kmjoin %>% tabyl(fRace, lab) %>% adorn_totals("row") %>% adorn_percentages("col") %>% adorn_pct_formatting(digits=0) %>% adorn_ns() %>% kable(caption = "Race vs K=4 Means Clusters") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+kmjoin %>% tabyl(fSuic, lab) %>% adorn_totals("row") %>% adorn_percentages("col") %>% adorn_pct_formatting(digits=0) %>% adorn_ns()  %>% kable(caption = "Suicide Attempts vs K=4 Means Clusters") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+kmjoin %>% tabyl(fHViol, lab) %>% adorn_totals("row") %>% adorn_percentages("col") %>% adorn_pct_formatting(digits=0) %>% adorn_ns() %>% kable(caption = "Hist. of Violence vs K=4 Means Clusters") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+kmjoin %>% tabyl(fDCond, lab) %>% adorn_totals("row") %>% adorn_percentages("col") %>% adorn_pct_formatting(digits=0) %>% adorn_ns() %>% kable(caption = "Disorderly Conduct vs K=4 Means Clusters") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+kmjoin %>% tabyl(fSubsDx, lab) %>% adorn_totals("row") %>% adorn_percentages("col") %>% adorn_pct_formatting(digits=0) %>% adorn_ns()  %>% kable(caption = "Substance Use vs K=4 Means Clusters") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+kmjoin %>% tabyl(fNonDx, lab) %>% adorn_totals("row") %>% adorn_percentages("col") %>% adorn_pct_formatting(digits=0) %>% adorn_ns() %>% kable(caption = "Non-substance Drug Use vs K=4 Means Clusters") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Describing Cluster Profiles
+
+For each group, we'll give a narrative description followed by the variables that support the narrative.
+
+**Group 1** are law-abiding, clean living, relatively older, more educated individuals. `fDCond` is lowest for this cluster (26%).
+Attempted suicide `fSuic` is low (10%).  Use of Cocaine (0.11), Alcohol (0.32), THC (0.05) are lowest of all clusters.   Average age is highest (43.58) of all clusters.   Both mental health scores were middle of the range.
+
+**Group 2** has low-key, non-suicidal, disorderly, moderate-heavy users of drugs an alcohol members.  They had the lowest average scores on `ADHD.Total` (15.37) and `MD.TOTAL` (4.46) of all clusters.   Attempted suicide was rarest of all clusters (10%).   Cocaine (1.24) as highest, alcohol (1.27) and THC (.80) were second highest of all clusters.
+
+**Group 3** has high-strung, heavy drinking, suicidal members.   They scored highest of all groups on both mental health survey by some margin `MD.TOTAL` (13.57) and `ADHD.Total` (52.52).  They reported the highest score for alcohol usage (1.89), some THC usage (.72).
+They also had the highest rate of attempted suicide (41%) of all clusters.
+
+**Group 4** has illegal drug users with high rates of suicide attempts and disorderly conduct.  They scored highest on disorderly conduct (93%) and 2nd highest suicide attempts (35%) and highest rate of cocaine use (1.61) and THC (1.14).  Mental health scores were middle of the range on both.
+
+We conclude our discussion of k-means clustering by noting that the dataset is highly non-representative of the general population.
+While the profiles are constructed from direct evidence, how well they will work out-of-sample is unclear and perhaps out of scope in this assignment.
+
+## Hierarchical Clustering Algorithm
+
+We also comment that hierarchical clustering can also be built easily using `FactoMineR` package using the same dataset used for the MFA analysis.  We are able to build a hierarchical tree as shown below in the depicted dendrogram with 4 clusters.
+
+```{r}
+
+res.PCA<-PCA(kmdfs,ncp=10, scale.unit=FALSE,graph=FALSE)
+res.HCPC<-HCPC(res.PCA,nb.clust=4,consol=TRUE,graph=FALSE)
+plot.HCPC(res.HCPC,choice='tree',title='Hierarchical tree')
+```
+The below chart shows the hierarchical cluster mapped onto a biplot using PCA on the dataset of points.
+
+We can see some similarities in the resulting clusters with those generated from the $k=4$ means cluster algorithm.
+
+
+```{r}
+
+plot.HCPC(res.HCPC,choice='map',draw.tree=TRUE,title='Factor map')
+```
+A 3-dimensional view of the hierarchical tree shows the linkages and hierarchy from an elevated point.
+But does not really produce additional insights in my opinion.
+
+```{r}
+plot.HCPC(res.HCPC,choice='3D.map',ind.names=TRUE,centers.plot=FALSE,angle=100,title='Hierarchical tree on the factor map')
+
+
+```
+
+In the table below, we show the contingency table between hierarchical clustering and k-means clustering.
+We conclude that both algorithms end up at similar places when run to 4 clusters total.
+
+The table below shows the number of individuals assigned to a hierarchical method cluster by row and the corresponding k-means cluster by column.
+
+Thus, we see that :
+
+*  hierarchical cluster 1 is assigned to k-means cluster 4.
+*  hierarchical cluster 2 is assigned to k-means cluster 1.
+*  hierarchical cluster 3 is assigned to k-means cluster 2.
+*  hierarchical cluster 4 is dispersed across 3 k-means cluster but mostly goes to cluster 3.
+
+The off-diagonal elements below represent the confusion terms in a non-binary confusion matrix setting.
+
+
+```{r comparison-clustering}
+
+zz = data.frame(hclust = res.HCPC$data.clust$clust, kmclust = kmjoin$lab )
+
+zz %>% tabyl( hclust, kmclust ) %>% adorn_totals("row") %>% adorn_percentages("row") %>% adorn_pct_formatting(digits=0) %>% adorn_ns() %>% kable(caption = "Hierarchical vs K=4 Means Clusters") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+
+```
 
 # Appendices
 
@@ -963,7 +1243,8 @@ Multiple Factor Analysis Playlist for using FactoMineR
 We summarize all the R code used in this project in this appendix for ease of reading.
 
 
-#```{r ref.label=knitr::all_labels(), echo=T, eval=F}
-#```
+```{r ref.label=knitr::all_labels(), echo=T, eval=F}
+
+```
 
 

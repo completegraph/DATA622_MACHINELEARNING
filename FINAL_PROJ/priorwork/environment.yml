@@ -1,0 +1,14 @@
+name: geo_env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - folium
+  - python=3
+  - geopandas
+  - matplotlib
+  - descartes
+  - voila
+  - bqplot
+  - voila-gridstack
+

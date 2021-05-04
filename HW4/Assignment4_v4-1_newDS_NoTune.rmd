@@ -154,9 +154,9 @@ The tidymodels approach allowed for parameter tuning, which in the case of the R
 
 With the opportunity to tune the parameters, a cross-fold validations setting of five folds and three repeats, resulting in 15 separate model combinations proved the most effective in terms of the final result while also keeping the model as simple as possible.
 
-```{r warning=F, message=F}
+```{r warning=F, message=F, eval=F}
 # SVM Model with Radial Basis Function
-svm_model <- svm_rbf(cost = tune(),
+svm_model_tune <- svm_rbf(cost = tune(),
                      rbf_sigma = tune()) %>%
   set_mode("classification") %>%
   set_engine("kernlab") %>% 
@@ -175,17 +175,6 @@ svm_model <- svm_rbf(cost = cost_val,
   translate()
 ```
 
-```{r warning=F, message=F, eval=F}
-# Generate formula
-formula_res <- svm_model %>%
-  tune_grid(data_recipe,
-    resamples = data_cv,
-    metrics = roc_vals,
-    control = ctrl
-  )
-
-#formula_res
-```
 
 # Model Evaluation
 
@@ -196,15 +185,14 @@ The output of the raw metrics shows very poor performance for kappa, with only a
 Finally, the output for the best ROC AUC indicates good performance with the top five results greater than 0.67 and indicate a potential varying selection method as compared to the accuracy metric.
 
 ```{r warning=F, message=F, eval=F}
-# Execute with a recipe
+# Generate recipe
 set.seed(123)
-recipe_res <- svm_model %>%
+recipe_res <- svm_model_tune %>%
   tune_grid(data_recipe,
     resamples = data_cv,
     metrics = roc_vals,
     control = ctrl
   )
-#recipe_res
 
 # https://www.tidyverse.org/blog/2020/07/tune-0-1-1/
 autoplot(recipe_res, metric="roc_auc") +
@@ -331,29 +319,29 @@ The final five plots display the performance of the predicted "Yes" value agains
 
 - The fAbuse plot clearly shows for those with higher levels of abuse, a predicted "Yes" can result.
 
-```{r warning=F, message=F, eval=F}
+```{r warning=F, message=F}
 # https://www.tidymodels.org/learn/work/tune-svm/
-augment(recipe_res) %>%
+scored_train %>%
   ggplot(aes(MD.Q1.Count, .pred_Yes, color = fSuic)) +
   geom_point(show.legend = FALSE) +
   facet_wrap(~fSuic)
 
-augment(recipe_res) %>%
+scored_train %>%
   ggplot(aes(MD.Q2, .pred_Yes, color = fSuic)) +
   geom_point(show.legend = FALSE) +
   facet_wrap(~fSuic)
 
-augment(recipe_res) %>%
+scored_train %>%
   ggplot(aes(MD.Q3, .pred_Yes, color = fSuic)) +
   geom_point(show.legend = FALSE) +
   facet_wrap(~fSuic)
 
-augment(recipe_res) %>%
+scored_train %>%
   ggplot(aes(fSex, .pred_Yes, color = fSuic)) +
   geom_point(show.legend = FALSE) +
   facet_wrap(~fSuic)
 
-augment(recipe_res) %>%
+scored_train %>%
   ggplot(aes(fAbuse, .pred_Yes, color = fSuic)) +
   geom_point(show.legend = FALSE) +
   facet_wrap(~fSuic)

@@ -1,0 +1,1611 @@
+---
+title: "Data 622 Homework 4: ADHD/Suicide Study"
+author: "Group 6: Alexander Ng, Scott Reed, Philip Tanofsky, Randall Thompson"
+date: "Submitted by 05/07/2021"
+output:
+  html_document:
+    df_print: paged
+    highlight: pygments
+    number_sections: yes
+    theme: readable
+    toc: yes
+    toc_depth: 3
+    toc_float: no
+    fontsize: 12
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+    number_sections: true
+    df_print: kable
+    highlight: tango
+editor_options:
+  chunk_output_type: inline
+fontsize: 11pt
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+# Your libraries go here
+
+library(tidymodels)
+library(tidyverse)
+library(ggplot2)
+library(ggrepel)
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(readxl)
+
+
+
+library(caret)    # Model Framework
+library(skimr)    # Used for EDA
+library(klaR)     # Implemented KNN and Naive Bayes models, etc
+library(class)    # used for KNN classifier
+
+# PLEASE ADD YOUR R LIBRARIES BELOW
+# ------------------------------
+library(janitor)  # used for tabyl function
+library(RColorBrewer)  # for ggplot
+library(kernlab)
+library(vip)
+library(rpart.plot)
+theme_set(theme_classic())
+
+# ---------------------------------
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
+
+```
+
+```{r control-slow-code}
+# Alex:
+# This code chunk is only to be used for conditionally disabling certain
+# very slow model code as I merge different sections and need to frequent recompile
+runSlowChunks = F
+
+```
+
+
+
+
+# Introduction {-}
+
+This document discusses analyses of a mental health data set.  
+
+**Section 1** conducts exploratory data analysis and data wrangling on the dataset.  
+We obtain a dataset with imputed values and omitted rows and columns. The author is Alexander Ng.
+
+**Section 2** contains an analysis using a multiple factor analysis (MFA) which is a generalization of principal components analysis (PCA).  The author is Alexander Ng.
+
+**Section 3** contains an analysis with hierarchical clustering and k-means analysis. The author is Alexander Ng.
+
+**Section 4** contains an analysis using a support vector machine (SVM) approach using suicide as the response variable.  The authors are Philip Tanofsky and Scott Reed.
+
+**Section 5** contains a supplementary analysis using binary logistic regression as a baseline model to evaluate the SVM results and contains additional conclusions.   The author is Randall Thompson.
+
+**Section 6** presents our `R` code and technical appendices and references.   The document was merged and edited by Randall Thompson.
+
+# Exploratory Data Analysis
+
+We load the data using the `readxl` package which is part of `tidyverse`.  This package allows us to do __name repair__ to the column headers
+of the Excel spreadsheet.  Using `.name_repair` equal to `universal`, we transform all column names with spaces or special characters into better named
+counterparts.   For example, `Hx of Violence` is transformed into `Hx.of.Violence` and `MD Q1k` into `MD.Q1k`.
+
+
+```{r excel-load}
+
+# Load the raw data
+raw_a = read_excel("ADHD_data.xlsx", sheet = 1, .name_repair = "universal")
+
+# Load the data dictionary
+b = read_excel("ADHD_data.xlsx", sheet = 2 )
+
+```
+
+
+The original dataframe contains 175 observations (i.e. survey participants) as rows and 54 columns as variables.
+```{r raw-dimensions}
+dim(raw_a)
+
+```
+
+The columns contain both qualitative and quantitative variables.   
+Moreover, some columns represent categorical data but is encoded as numerical values.
+
+Thus, we will perform 4 data transformations to obtain a cleansed and fully populated dataframe:
+
+1. Removal of observations with significant data issues
+2. Remove of columns where data is meaningless or missing excessive values.
+3. Imputation of missing values in those columns where business analysis allows sensible choices.
+4. Rescaling or conversion of data to factor or character values.
+
+In the final section, we make several demographic comparisons about the data to the general populations of the US.
+
+## Missing Data Treatment
+
+### Removal of Observations
+
+Four observations had missing values for `Alcohol`.  But those observations also have a large number of correlated missing data columns as shown below.
+Excluding these 4 observations eliminate missing data for 6 columns and undefined values for several other variables.
+Thus, we retain 97.7% (or 171) of the original observations.
+
+```{r}
+
+raw_a %>% filter( is.na(Alcohol)) %>% 
+  dplyr::select(Initial, 
+                Alcohol, THC, Cocaine, Stimulants, 
+                Sedative.hypnotics, Opioids, 
+                Court.order, Education, 
+                Hx.of.Violence, Disorderly.Conduct, 
+                Suicide, Abuse, 
+                Non.subst.Dx, Subst.Dx, 
+                MD.TOTAL, 
+                ADHD.Total, 
+                Age, 
+                Race, 
+                Sex)
+
+```
+
+
+```{r remove-observations}
+
+a <- raw_a %>% filter(!is.na(Alcohol))
+
+```
+
+## Removing Columns
+
+We remove columns `Initial`, `Psych.meds.` because they have no useful information or have over 50% missing values.
+
+
+```{r remove-columns}
+dim(a)
+
+a <- a %>% dplyr::select(-any_of(c("Initial", "Psych.meds.")))
+
+dim(a)
+
+```
+
+## Imputing Values
+
+We explain our decisions on the handling of the remaining imputed values here.
+
+```{r skim}
+
+skim(a) %>% dplyr::filter( n_missing > 0 )
+
+```
+
+### Abuse
+
+There are only 10 remaining observations with missing Abuse data.   As we see below, the most frequent response is 0 -- i.e. No.
+
+```{r abuse-plot}
+
+barplot(table(a$Abuse, useNA = 'ifany') , 
+        xlab='Abuse Scale', ylab = 'Count', 
+        main="Frequency of Abuse responses" )
+
+```
+
+Moreover, the conditional distribution of survey response score `ADHD.Total` and `MD.TOTAL` seems unchanged for this subpopulation.
+So we make the imputation.
+
+```{r abuse-impact}
+# Examine missing column values by comparing values of other variables.
+# to check if the observations may be considered atypical.
+# -----------------------------------------------------------------
+missing_Abuse = a %>% filter(is.na(Abuse))
+
+print(paste0("Conditional Mean ADHD.Total: " , mean(missing_Abuse$ADHD.Total)  , " Population Mean ADHD.Total: ", mean(a$ADHD.Total) ) )
+print(paste0("Conditional Mean MD.Total: ", mean( missing_Abuse$MD.TOTAL)  ,  " Population Mean MD.TOTAL: ", mean(a$MD.TOTAL) ) )
+
+```
+
+### Suicides
+
+We choose to impute Suicide=0 for those observations where Suicide is not defined.
+The number of incidents is low, the most common response is 0 (No) and the conditional mean of ADHD.Total and MD.Total
+is unchanged for this subpopulation.
+
+```{r impute-suicides}
+
+suicide_tab = table(a$Suicide, useNA = 'ifany')
+
+
+barplot(suicide_tab, 
+        xlab='Attempted Suicide Response 0=No', ylab = 'Count', 
+        main="Frequency of Attempted Suicide responses" )
+
+
+missing_suicide = a %>% filter(is.na(Suicide))
+
+print(paste0("Conditional Mean ADHD.Total: " , mean(missing_suicide$ADHD.Total)  , " Population Mean ADHD.Total: ", mean(a$ADHD.Total) ) )
+print(paste0("Conditional Mean MD.Total: ", mean( missing_suicide$MD.TOTAL)  ,  " Population Mean MD.TOTAL: ", mean(a$MD.TOTAL) ) )
+
+```
+
+### History of Violence and Disorderly Conduct
+
+The non-responses for History of Violence and Disorderly conduct are perfectly correlated in our dataset.
+Also, because the questions are so conceptually linked, we consider the frequency table of their
+joint distribution.   As we see below, the most frequent scenario is `Disorderly Conduct` = ` while 
+`History of Violence` = 0 twice as frequently as any other scenario.
+
+Moreover, the conditional mean of `ADHD.Total` and `MD.TOTAL` is unaffected for this subpopulation.
+
+
+```{r violence-disorder-impute}
+
+table(a$Hx.of.Violence, a$Disorderly.Conduct, useNA='ifany') %>% kable(main="Frequency of Violence/Disorderly Conduct") %>% 
+  add_header_above(c("Disorderly Conduct" = 4)) %>% kable_styling(bootstrap_options = c("striped", "hover")) %>%
+  footnote(general="Each row shows counts for History of Violence 0=No, 1=Yes")
+
+
+missing_disorderly = a %>% filter(is.na(Disorderly.Conduct))
+
+print(paste0("Conditional Mean ADHD.Total: " , mean(missing_disorderly$ADHD.Total)  , " Population Mean ADHD.Total: ", mean(a$ADHD.Total) ) )
+print(paste0("Conditional Mean MD.Total: ", mean( missing_disorderly$MD.TOTAL)  ,  " Population Mean MD.TOTAL: ", mean(a$MD.TOTAL) ) )
+
+
+```
+
+### Education
+
+We find that the modal years of Education is 12 and impute that value where none is provided.
+This corresponds to attainment of high school degree but not college.
+
+
+```{r education-impute}
+
+table(a$Education, useNA='ifany')
+```
+
+
+### Substance Use
+
+```{r impute-dx}
+
+table(a$Subst.Dx, a$Non.subst.Dx, useNA='ifany')
+
+```
+
+We infer some level of substance related drug use when Non substance related use is low because of the
+cross-tabulation frequency table.  We also assume Non-substance related drug use is 0 when no answer is provided.
+
+
+## Transforming Variables
+
+In this section, we apply the above data imputation rules to the variables with missing values.
+Next, we construct factor equivalent variables with the naming convention of a `f` prefix to any abbreviated version of the original variable name.
+Lastly, we remove the older version of the columns with their factor equivalent.
+
+A table below shows the translation from old to new variables along with the range of permitted values.
+
+
+```{r}
+
+#  Use case_when to convert numeric flags to character equivalent qualitative variables
+#  Note that NA are automatically assigned by default if encountered by case_when
+#  so handling of NA is implicit.
+#
+
+a %>% mutate(
+             Abuse  = case_when( is.na(Abuse) ~ 0 ,       # Based on data imputation investigation above
+                                 !is.na(Abuse) ~ Abuse ) ,
+             
+             Suicide = case_when( is.na(Suicide) ~ 0 ,  # Suicide attempts are generally rare  - this imputed value is most common
+                                  !is.na(Suicide) ~ Suicide
+                                  ) ,
+             Hx.of.Violence = case_when( is.na(Hx.of.Violence) ~  0 , # Most common cose is no history of violence)
+                                        !is.na(Hx.of.Violence) ~ Hx.of.Violence ) ,
+             
+             Disorderly.Conduct = case_when( is.na(Disorderly.Conduct) ~ 1 ,  # Most common case is to exhibit disorderly conduct - even conditional on no history of violence
+                                             !is.na(Disorderly.Conduct) ~ Disorderly.Conduct
+                                             ) ,
+             
+             Court.order = case_when( is.na( Court.order) ~ 0 ,   # Most common case
+                                      !is.na( Court.order) ~ Court.order )   ,
+             
+             Education = case_when( is.na( Education ) ~ 12 ,  # Most common case
+                                    !is.na( Education)  ~ Education
+                                    ) ,
+             
+             Non.subst.Dx = case_when( is.na(Non.subst.Dx) ~ 0 , # Most common case
+                                       !is.na( Non.subst.Dx) ~ Non.subst.Dx ) ,
+             
+             Subst.Dx = case_when( is.na( Subst.Dx ) ~ 3 , # Treat NA as strong drug use category
+                                   !is.na( Subst.Dx) ~ Subst.Dx )
+                                   
+        
+             
+             ) %>%
+       mutate(fSex = case_when( Sex == 1 ~ "M", 
+                               Sex == 2 ~ "F" ) ,
+             fRace = case_when(
+                  Race == 1 ~ "WH" ,
+                  Race == 2 ~ "AF" ,
+                  Race == 3 ~ "HI" ,
+                  Race == 4 ~ "AS" ,
+                  Race == 5 ~ "NA" ,
+                  Race == 6 ~ "OT"
+              ) ,
+             fCO = case_when(Court.order == 0 ~ "No" ,
+                             Court.order == 1 ~ "Yes") ,
+             fHViol = case_when( Hx.of.Violence == 0 ~ "No",
+                                 Hx.of.Violence == 1 ~ "Yes") ,
+             fDCond = case_when( Disorderly.Conduct == 0 ~ "No" ,
+                                 Disorderly.Conduct == 1 ~ "Yes") ,
+             fSuic  = case_when( Suicide == 0 ~ "No" ,
+                                 Suicide == 1 ~ "Yes")  ,
+             
+             fNonDx =  as.factor(Non.subst.Dx)  ,
+             
+             fSubsDx = as.factor(Subst.Dx) ,
+             
+             fAbuse = factor(Abuse, ordered = TRUE)   # No way to make the Abuse variable into a non-skewed scaled variable
+       ) %>% 
+      dplyr::select( -one_of(c("Psych.meds.", "Initial", 
+                               "Sex", "Race", "Court.order", "Hx.of.Violence", "Disorderly.Conduct" ,
+                               "Suicide", "Non.subst.Dx", "Subst.Dx", "Abuse")) )-> aa
+
+
+
+
+```
+
+Note the following transformation from the original variable to the new one as follows:
+
+
+```{r convert-vars}
+
+df = data.frame(OldVar = c("Sex" , "Race" , "Court.order", "Abuse", "Hx.of.Violence", "Disorderly.Conduct", "Suicide", "Non.subst.Dx", "Subst.Dx") ,
+                NewVar = c("fSex", "fRace", "fCO",        "fAbuse", "fHViol",       "fDCond",               "fSuic" , "fNonDx" ,       "fSubsDx" ) ,
+                Range  =  c("M,F",   "WH,AF,HI,AS,NA,OT", "Yes,No" , "0-7 (factor)", "Yes,No" ,   "Yes,No", "Yes,No", "0,1,2 (factor)", "0,1,2,3 (factor)" ) )
+
+df %>% kable(caption="Conversion of Old Variables to New") %>% kable_styling(bootstrap_options = c("hover", "striped"))
+```
+
+
+We export the dataset for reference purposes.
+
+```{r export-aa}
+
+write_csv(aa, "New_adhd.csv")
+
+```
+
+
+```{r}
+
+new_col_order = c(
+
+                  "Age" ,
+                  "Education",
+                  
+                  "fAbuse" ,
+                  "fCO" ,
+                  "fHViol" ,
+                  "fDCond" ,
+                  "fSuic"  ,
+                  
+                  "fNonDx" ,
+                  "fSubsDx" ,
+                  
+                  "ADHD.Q1",
+                  "ADHD.Q2",
+                  "ADHD.Q3",            "ADHD.Q4",            "ADHD.Q5",            "ADHD.Q6",   
+                  "ADHD.Q7",            "ADHD.Q8",            "ADHD.Q9"  ,          "ADHD.Q10", 
+                  "ADHD.Q11",           "ADHD.Q12",           "ADHD.Q13",           "ADHD.Q14", 
+                  "ADHD.Q15",           "ADHD.Q16",           "ADHD.Q17",           "ADHD.Q18",     
+                  "ADHD.Total", 
+                  
+                  "MD.Q1a",             "MD.Q1b",             "MD.Q1c",            
+                  "MD.Q1d",             "MD.Q1e",             "MD.Q1f",             "MD.Q1g",            
+                  "MD.Q1h",             "MD.Q1i",             "MD.Q1j",             "MD.Q1k" ,           
+                  "MD.Q1L",             "MD.Q1m",             "MD.Q2",             "MD.Q3",             
+                  "MD.TOTAL" ,
+                  
+                  "Alcohol",
+                  "THC" ,
+                  "Cocaine" ,
+                  "Stimulants" ,
+                  "Sedative.hypnotics" ,
+                  "Opioids" ,
+                  
+                  "fSex", 
+                  "fRace" 
+                  )
+
+ab = aa[, new_col_order]
+
+#skim(ab)
+
+```
+
+
+## The Survey Is Not Representative of the US Population
+
+Because the dataset is anonymized, we have no background context of the study's location, purpose and population.
+Comparisons with available data sources suggest that the survey population is highly non-representative by gender, race,
+educational attainment or history of violence of the US general population.  We present evidence for each discrepancy in turn.
+
+Consequently, we should not apply statistics inferences and machine learning predictions from the dataset and our models to the general US population.   The researcher needs to condition any inferences on the intended and true population.
+
+### Education
+
+The Educational attainment of the survey population is below US average.
+US Census data shows US population 18 years and older have graduated high school or better is 89%.
+By comparison, in our sample only 68% have graduated high school or better.   (We use the 18 years and older population to match the observed age range in the sample.)   The below table shows the frequency of educational attainment by years of education within the survey population.
+
+```{r education-low}
+(tab_education = table(aa$Education, useNA='ifany') )
+```
+
+Summing up the count of those with 11 years or less of education, we obtain the figure:
+
+```{r education-hsgrad}
+(hsgrad = 1 - sum(tab_education[1:6]) / sum(tab_education))
+
+```
+
+Below we show the US Census trend for educational attainment about adults 24 and older.  The 18 years and older population is contained in the underlying Excel spreadsheet, however.
+
+<a href="https://www.census.gov/library/visualizations/2017/comm/americas-education.html?cid=americas-education" target="_blank"><img src="https://www.census.gov/library/visualizations/2017/comm/americas-education/_jcr_content/map.detailitem.950.high.jpg/1513289287771.jpg" alt="America's Education: Population Age 25 and Over by Educational Attainment" width="648" height="648" title="America's Education: Population 25 and Over by Educational Attainment"/></a>[Source: U.S. Census Bureau]
+
+
+### Gender
+
+The gender within the survey population is heavily skewed towards males at 56.6% instead of 49.1% as in the general population.
+
+```{r gender-breakdown}
+freq_sex = table(aa$fSex)
+
+freq_sex = rbind( freq_sex / nrow(aa)) * 100
+
+freq_sex %>% kable(digits = 1, caption="Percentage by Gender" )
+```
+
+### Race
+
+The survey population is not representative of the racial composition of the US.  
+
+```{r racial-breakdown}
+
+race_freq = table(aa$fRace)
+race_freq = rbind(race_freq, race_freq/nrow(aa)*100)
+
+race_freq %>% kable(digits = 1) %>% kableExtra::kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+The US Census Bureau shows Whites are 76.3%,  Blacks are 13.4%, Hispanics are 18.5%, Asians are 5.9%, American Indian are 1.3% according to 2019 data available on [this link](https://www.census.gov/quickfacts/fact/table/US/PST045219).
+
+We conclude the Blacks are overrepresented in the survey 57.1% (survey) vs. 13.4% (census), Whites are underrepresented 41.1% (survey) vs. 76.3%.  Hispanics are underrepresented 0.6% (survey) vs. 18.5% (census) and Asians are not represented at all 0% (survey) vs. 5.9% (census).
+
+
+# Multiple Factor Analysis of the Mental Health Data
+
+Multiple Factor Analysis (MFA) is a generalization of principal components analysis (PCA) that allows the combined use of quantitative and *qualitative* variables in a single model.   Because PCA does not support qualitative variables, I have chosen to implement MFA for this assignment.  MFA can be viewed as a weighted combination of PCA for quantitative variables and Multiple Correspondence Analysis (MCA) for qualitative variables.   While a number of the model outputs can be intrepreted in a similar fashion as in PCA, MFA allows variables to be grouped.   Thus, we can explore the relations between individuals, variables and groups of variables.
+
+An exposition of the mathematical background of MFA is too lengthy to include here.
+ I refer the reader to the online course on PCA, MCA, MFA taught by [Francois Husson](https://husson.github.io/MOOC.html#AnaDoGB) and the textbook by Jerome Pages and Francois Husson, "Exploratory Multivariate Data Analysis by Example Using R",(http://factominer.free.fr/course/books.html)
+They also implement and support the software package `FactoMineR` and `FactoShiny` used herein.
+
+In the next section, I describe the model setup and the mapping of variables into groups.  Afterwards, I report my findings at overall performance of the MFA model and the contribution of groups of variables   Then, I go deeper into the individuals looking at how the biplot separates the individuals by gender, race and behavioral categories.  Then, I go deeper into the variable correlations and loadings on the MFA dimensions.
+
+## Model Setup
+
+To run MFA, we need to group the variables by type:  __quantitative__ or __qualitative__ and by role: __active__ or __supplementary__.   __Active__ means the variable is used in estimating the MFA factors.   __Supplementary__ means the variable is not used to calculate the MFA dimensions but its values are fitted ex-post into the MFA dimensions for interpretative context of the __active__ variables.
+
+A variable group consists of a set of columns of the dataset of one *type* and one *role*.   We are required to partition all variables into groups.  MFA requires at least 2 groups to be run.   For each group, a PCA analysis is run - either on the actual values for a quantitative group or on a 0-1 matrix of dummy variables for a qualitative group. 
+ 
+```{r factorminer-load}
+library(FactoMineR)
+library(factoextra)
+
+```
+
+
+We consider an MFA analysis on the complete set of variables excluding  the variables  `ADHD.Total` and `MD.TOTAL` which are sums of survey scores.
+Since MFA can handle individual survey scores, we prefer to use those columns to have more granular insights.  Excluding those totals avoids linear dependencies and zero eigenvalues in the MFA.
+
+
+```{r amfa1-create}
+
+
+amfa1 = ab %>% dplyr::select( -one_of("ADHD.Total", "MD.TOTAL") )
+
+# Presenting the table of variables in the dataframe is only needed for initial setup
+
+bb = summary.default(amfa1) %>% as.data.frame() %>% dplyr::group_by(Var1) %>% tidyr::spread(key=Var2, value=Freq ) 
+
+bb$idx = seq.int(1,nrow(bb))
+
+#bb %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+Our dataset `amfa1` will be used in the MFA analysis.  It has 50 variables and 171 observations.
+
+```{r}
+dim(amfa1)
+```
+
+We partition the variables into 8 groups as shown in the table below.  They are 4 groups of active quantitative variables and 2 groups of active qualitative variables and 2 groups of supplementary qualitative variables.
+
+```{r amfa1-vars-df}
+
+amfa1_vars_df = data.frame( 
+  GroupName =c('AE', 'Abuse' ,   'Vio', 'Dx' ,'ADHD' ,'MD', 'Sub', 'Demo' ) ,
+  Type = c('Active', 'Supp',     'Active', 'Active', 'Active', 'Active', 'Active', 'Supp') ,
+  Role = c('scaled', 'nominal',  'nominal', 'nominal' , 'scaled', 'scaled', 'scaled' , 'nominal' ) ,
+  NumVars = c( 2, 1, 4, 2, 18, 15, 6, 2 ) ,
+  Variables = c( 'Age, Education', 'fAbuse', 'fCO, fHViol, fDCond, fSuic', 'fNonDx, fSubsDx', 'ADHQ.Q1 ... ADHD.Q18' ,
+                 'MD.Q1a, ... MD.Q1m, MD.Q2, MD.Q3', 'Alcohol, THC, Cocaine, Stimulants, Sedative.hypnotics, Opioids',
+                 'fSex, fRace' )
+  
+) 
+
+amfa1_vars_df %>% kable(caption="MFA Variable Groups") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+
+We choose to assign `fSex`, `fRace`, `fAbuse` as supplementary variables.  Omitting potentially sensitive data like Race, Sex and Abuse
+may be beneficial in machine learning applications.   Secondly, they may give insight into well the model separates individuals by other variables.
+If the model is accurate, the omitted variables should also be separated by the MFA analysis.
+
+
+```{r amfa1-model1}
+res.amfa1<-MFA(amfa1,group=c(2,1,4,2,18,15,6,2),type=c('s','n','n','n','s','s','s','n'),name.group=c('AE', 'Abuse' ,'Vio', 'Dx' ,'ADHD' ,'MD', 'Sub', 'Demo' ),num.group.sup=c(2,8),graph=FALSE)
+
+```
+
+
+## Model Performance
+
+### Scree Plot
+
+Due to the diversity of survey data, the dimension reduction does not dramatically explain most of the variance with 2 or 3 dimensions.  That is, there is no sharp "elbow" in the scree plot of the MFA dimensions below.
+The first 2 dimensions capture 11.4% and 10.9% of the variance respectively.
+The first 10 dimensions are required to explain 65.2% of the cumulative variance.  
+
+```{r}
+# Scree plot
+
+fviz_screeplot(res.amfa1)
+
+head(res.amfa1$eig, n=10) %>% kable(caption="Eigenvalues of MFA", digits = 1) %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+
+### Group Plot
+
+Next we define and explain the group plot results.  The group plot represents the $J$ variable groups as points on a unit square.  The X-axis represents MFA dimension 1 - represented by the vector $v_1$ and Y-axis represents MFA dimension 2 - with vector $v_2$.  The variable groups $K_1, \cdots , K_J$ would be the 8 groups previously set up.
+
+The group plot below shows a statistic $L_g(K, v_i)$ for MFA principal components $v_1, v_2$.   $L_g$ is the projected inertia of the variables in group $K$ on $v_i$ divided by the largest eigenvalue of PCA on group $K$.   More formally,
+
+$$ L_g(K_j, v_1) = \frac{1}{\lambda_{1}^{j}} \sum_{k \in K_j} cov^2(x_k, v_1)$$
+
+In fact, MFA defines the first principal component $v_1$ to maximize $L_g$ over all variable groups.
+
+$$\underset{v_1 \in R^I}{\operatorname{arg max}} \sum_{j=1}^{J} L_g(K_j,v_1)$$
+
+We know that $0 \leq L_g(K,v_1) \leq 1$ because the projected inertia is bounded by the largest eigenvalue $\lambda_{1}^{j}$.  When $L_g(K_j,v_1)=0$, the variable group is uncorrelated to the first MFA dimension.  When $L_g(K_j,v_1)=1$, the variable group is perfectly correlated with the first MFA dimension.
+
+
+The group plot tells us:
+
+* `AE` (Age, Education) group is somewhat projected to dimension 1 but not projected to dimension 2.
+* `Dx`, `Sub`, and `Vio` groups are somewhat projected to dimension 1 and weakly projected to dimension 2.
+* `Demo`, `Abuse` are not projected to dimension 1 and weakly projected to dimension 2.
+* `ADHD` is not projected to dimension 1 but strongly projected to dimension 2.
+* `MD` is weakly projected to dimension 1 and strongly projected to dimension 2.
+
+In brief, the survey responses to ADHD and Mood are strong descriptors but play a secondary role because Age, Education, Drugs, Substance and Violence features explain more of the variation.
+
+
+```{r amfa1-groupplots}
+# Groups representation
+plot.MFA(res.amfa1, choix="group")
+
+```
+
+### Qualitative Variables Biplot
+
+In the following biplot, we show the barycenters of all active qualitative (categorical) variable values.  
+The coordinates of a barycenter are the means of the individuals coordinates along MFA dimensions 1 and 2 respectively.
+
+
+For example, we highlighted the values of `fSuic` as $\color{green}{\text{`fSuic_Yes`}}$ and 
+$\color{red}{\text{`fSuic_No}}$.   We observed that individuals who answered yes to the attempted Suicide question are centered in the upper right corner (i.e. Quadrant I) while those who answered no to the attempted Suicide question are centered in Quadrant III.  
+
+
+When the barycenters of a categorical variable's values are far apart, our MFA is using the categorical value in defining the principal axes.
+
+```{r active-qual-barycenter}
+
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('ind', 'quali.sup'),habillage='fSuic', select='contrib  10',title="Qualitative Categories Barycenters", cex=.9)
+
+```
+
+The Barycenters plot suggests:
+
+* Violence related variables have barycenters separated by the origin with No categories for history of violence, suicide, court order in Quadrant III while their Yes responses are centered on upper Quadrant I.
+* `SubsDx`  is well separated.  It takes 4 categorical values.  Individuals with `SubsDx=0` are located in left of Quadrant II while those with `SubsDx=1,2,3` are clustered in lower right half.   We cannot readily distinguish degrees of `SubsDx` among 1,2 or 3.  
+* `NonDx` is well separated but its quadrant orientation is flipped with `SubsDx`.  It is worth investigating why Non-substance related Dx use is opposite of Substance-related Drug use.   Examining the contingency table of non-substance related drug use vs. substance related drug use, we see not using Non-substance drug use is strongly associated with substance-related drug use.
+
+```{r}
+cbind( NonDrugUse = c("0", "1", "2") , table(amfa1$fNonDx, amfa1$fSubsDx) ) %>% kable() %>% 
+  add_header_above(c(" " = 2, "Substance-related Dx Use" = 4)) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+### Correlation Circle
+
+
+The following plot shows the correlations of each quantitative variable $X_j$ to the MFA dimension 1 and 2 vectors $v_1$ and $v_2$.
+That is, $x(X_j) = cor(X_j, v_1)$ and $y(Y_j)=cor(X_j, v_2)$.
+
+There are 4 active quantitative variable groups.  Each group is assigned its own color and all member variables in a group are plotted on the circle.
+Hence it is a little busy to see the position of each survey question variable on the below circle plot.
+
+
+```{r amfa1-correlation-var}
+
+plot.MFA(res.amfa1, choix="var",habillage='group',title="Correlation circle")
+
+```
+
+However, we can draw several conclusions:
+
+* ADHD survey responses are all strongly correlated to each other and to MFA dimension 2.
+* MD survey responses are more dispersed but still well correlated to MFA dimension 2.
+* Substance use is quite dispersed but positively correlated to MFA dimension 1.  Of these, THC, Cocaine are dominant.  Stimulants and Sedative.hypnotics are not well projected to MFA $v_1$ or $v_2$.
+* Age and Education are negatively but moderately correlated to MFA dimension 1.
+* Substances like THC and Cocaine are positively correlated to each other and MFA dimension 1 but somewhat negatively to dimension 2.
+
+
+## Intepreting the Principal Components
+
+Now we examine the granular variable interaction with the first two principal components of the MFA.
+Our goal is to interprete the two principal axes based on interpretation of the variables in their business domain.
+
+### Dimension 2 - Survey Information
+
+Previously, we observed that ADHD and MD questions projected meaningfully onto the 2nd MFA dimension but not the first.
+Here, we will look at their correlations and covariances in detail.
+
+The plot below displays the percentage contribution  of each variable to the covariance with MFA dimension 2
+and its correlation to the same.   We rank the variables in the table and show the top 5 and bottom 5 variables.
+Thus, we will see which survey questions have the greatest explanatory power.
+
+The table and chart show the most important ADHD survey questions are:
+
+  * ADHD.Q8 
+       + 70% correlation
+       + 2.91% of explained covariance
+       + "How often do you have difficulty keeping your attention when you are doing boring or repetitive work?"
+       
+  * ADHD.Q10 
+       + 67% correlation
+       + 2.7% of explained covariance
+       + "How often do you misplace or have difficulty finding things at home or at work?"
+       
+  * ADHD.Q7 
+       + 66%  correlation
+       + 2.56% of explained covariance
+       + "How often do yo make careless mistakes when you have to work on a boring or difficult project?"
+  
+In general, all ADHD question variables are consistently projected and significant.
+
+Some MD questions are also important and significantly projected but *not* consistently.
+
+  * MD.Q1g 
+       + 69% correlation
+       + 4.67% of explained covariance is most important
+       + "...you were so easily distracted by things around you that you had trouble concentrating or staying on track
+       
+  * MD.Q2  
+       + 62% correlation
+       + 3.76% of explained covariance
+       + "... have several of these ever happened during the same period of time?"
+       
+  * MD.Q1b 
+       + 59% correlation
+       + 3.41% of explained covariance
+       + "... you were so irritable that you shout at people or started fights or arguments?"
+
+However, some MD survey questions had no correlation to the MFA dimension 2 and may be ineffective predictors of related variables.
+
+   * MD.Q1c
+       + 7.7% correlation
+       + 0.06% of explained covariance
+       + "... you felt much more self-confident than usual?"
+
+
+```{r dim2-var-contrib}
+mfa_var_cor = res.amfa1$global.pca$var$cor[,2]
+mfa_var_contrib= res.amfa1$global.pca$var$contrib[,2] 
+
+df_dim2 = data.frame( mfa_var_cor, mfa_var_contrib)
+
+```
+
+```{r influential-survey-questions}
+
+# Influential Survey questions
+df_dim2 %>% ggplot(aes(x=mfa_var_contrib, y=mfa_var_cor, label=rownames(df_dim2))) + 
+  ggtitle("Dim 2 - Variables Correlations-Explained Covariance") +
+  xlab("% Explained Covariance") + ylab("correlation to Dim 2") +
+  geom_point() + geom_text_repel()
+```
+
+
+```{r influential-survey-extremum}
+df_dim2 %>% arrange(desc(mfa_var_cor)) %>% filter( row_number() > max(row_number()) - 5 | row_number() <= 5 ) %>% 
+  kable(digits=2, col.names = c("Corr", "Var-Cntrb"), caption="Dim 2 - Corr/Covar%" ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+
+### Dimension 1 - Education, Substances and Conduct
+
+
+
+```{r influential-social-features}
+
+df_dim1 = data.frame( cor = res.amfa1$global.pca$var$cor[,1], pct = res.amfa1$global.pca$var$contrib[,1] )
+
+df_dim1%>% ggplot(aes(x=pct, y=cor, label=rownames(df_dim1))) + 
+  ggtitle("Dim 1 - Variables Correlations-Explained Covariance") +
+  xlab("% Explained Covariance") + ylab("correlation to Dim 1") +
+  geom_point() + geom_text_repel()
+
+```
+
+
+```{r influential-ag-extrema}
+df_dim1 %>% arrange(desc(cor)) %>% filter( row_number() > max(row_number()) - 5 | row_number() <= 5 ) %>% 
+  kable(digits=2, col.names = c("Corr", "Var-Cntrb"), caption="Dim 1 - Corr/Covar%" ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+
+```
+
+
+### Interpretation
+
+Our earlier two subsections gives us information to interprete the first two principal components of the MFA.
+
+The first MFA principal component $F_1$ appears to differentiate:
+   
+   * Substance related Drug Use  $F_1 > 0$ is Yes vs.  $F_1 < 0$ is No.
+   * Education                 $F_1 > 0$ has low education vs.  $F_1 < 0$ has high education.
+   * THC                       $F_1 > 0$ uses Marijuana vs. $F_1 < 0$ does not use Marijuana.
+   * Age                       $F_1 > 0$ is younger vs. $F_1 < 0 $ is older
+   * Disorderly Conduct         $F_1 > 0$ has been disorderly vs.  $F_1 < 0$ has not been disorderly
+   * MD Q1a                     $F_1 > 0$ can get hyper vs. $F_1 < 0 $ does not get hyper and into trouble.
+   
+The second MFA principal component $F_2$ appears to differentiate on the survey questions and mood related behavior.
+
+   * Suicide attempts     $F_2 > 0$ is Yes  vs. $F_2 < 0$ is No.
+   * MD Q1g can't concentrate: $F_2 > 0$ is Yes vs. $F_2 < 0$ is No.
+   * ADHD Q8 can't pay attention when bored: $F_2 >0$ is Yes vs. $F_2 < 0$ is No.
+
+## Analysis of Individuals
+
+Plotting the data cloud of individuals on the first 2 dimensions of an MFA analysis can provide
+important information about the predictive or discriminatory power of model which we may not see in the
+earlier plots.  For each individual, we plot their coordinates on the MFA dimension 1 and 2 axes in a scatter plot.
+
+If we color code each individual point by their value $k$ of category $K_j$ then we can test if the points are clustered in the biplot for any value $k$.   This will imply that the MFA dimensions 1 and 2 can separate those individuals by category $K_j$ 
+and potentially yield additional meaningful predictions.
+
+
+
+```{r eval=FALSE}
+# To plot and examine data for 7 paragon individuals
+# ------------------------------------------------
+ fviz_mfa_ind(res.amfa1, select.ind = list(name=c(88,2, 18, 59, 141, 114, 84 ) ), invisible='quali.var')
+
+# Choose some representative individuals from the survey based on their alignment with MFA Dimensions 1 and 2
+t( data.frame( Subject=c(88,2, 18, 59, 141, 114, 84 ),  Dim = c('West', 'NorthWest', 'North', 'NorthEast', 'East', 'South', 'SouthWest'), amfa1[c(88, 2, 18, 59, 141, 114, 84), c(1:9,10:19,28:34,43:45,49:50)] ) ) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+
+### Suicide, History of Violence and Disorderly Conduct
+
+We examine the `Viol` group of categorical variables first.  Do the MFA dimensions differentiate by these variables?
+The answer is $\color{blue}{\text{Yes!}}$   
+
+In the biplot below "Individuals by Suicide Attempt", the green dots represents
+who attempted suicide.  We see the green dots fall mostly *above* the $X$-axis and slightly concentrated on the right plane.
+Thus, Dimension 2 appears to differentiate by attempted suicide.
+
+
+```{r amfa1-suicide}
+
+# Graphs
+# Individuals Suicide
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali','quali.sup'),select='contrib  171',habillage='fSuic',title="Individuals by Suicide Attempt")
+
+```
+
+
+In the biplot below "Individuals by Court Order", the green dots represents
+who obtained or received Court Orders.  We see the green dots fall mostly on the right half plane.
+Thus, Dimension 1 appears to differentiate by Court Order = Yes but not when Court Order = No.
+
+
+
+```{r amfa1-CO}
+
+# Individuals categorized by Court Order
+# fCO = Yes strongly concentrated on right half plane.
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali','quali.sup'),select='contrib  171',habillage='fCO',title="Individuals by Court Order")
+```
+
+
+In the biplot below "Individuals by History of Violence", the green dots represents
+who obtained or received Court Orders.  We see the green dots fall mostly on the right half plane but some points falls into part of the left half plane.
+Thus, Dimension 1 appears to partly differentiate by when `fHViol=Yes`.
+
+
+
+```{r amfa1-HViol}
+# Individuals categorized by History of Violence
+# fHViol_Yes concentrated on right half plane.
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali','quali.sup'),select='contrib  171',habillage='fHViol',title="Individuals by History of Violence")
+```
+
+The majority of survey participants engaged in disorderly conduct.   Dimension 1 is effective in differentiating those who did not engage in disorderly conduct.  Those who did not engage in disorderly conduct fall in the left side of the plot.
+
+
+```{r amfa1-DCond}
+# Indivduals categorized by Disorderly conduct
+# fDCond=No is concentrated on left half plane
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali','quali.sup'),select='contrib  171',habillage='fDCond',title="Individuals by Disorderly Conduct")
+```
+
+
+### Supplemental Variables:  Race, Gender and Abuse
+
+Moving to the supplemental qualitative variables, we will conclude that MFA has little or no ability to differentiate by these categories.  We see below that Whites and Blacks are roughly evenly distributed across the biplot.  There is no clear visual evidence that MFA can differentiate by Race along dimensions 1 and 2.  However, remember that supplementary variables are not used in calibrating the MFA model.
+
+
+```{r amfa1-race}
+
+# Individuals categorized by Race
+# Blacks and Whites well dispersed across the four quadrants
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali','quali.sup'),select='contrib  171',habillage='fRace',title="Individual by race")
+```
+
+
+Women seem to be more heavily concentrated in the upper half plane.  Thus, MFA dimension 2 may somewhat differentiate by `Sex`.
+
+```{r amfa1-sex}
+# Individuals categorized by Sex
+# Females concentrated in upper half plane
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali','quali.sup'),select='contrib  171',habillage='fSex',title="Individual by Sex")
+```
+
+Abuse is relatively challenging to visualize because it has 8 levels of data.  We observe no obvious patterns to help differentiate Abuse levels.  This is consistent with the low projection of Abuse in the previous Groups plot.  Both the individuals biplot and the simpler barycenter biplot don't make much sense.  In the latter, the barycenters of the levels of Abuse show no pattern or trend.
+
+
+```{r amfa1-Abuse}
+# Factor Plot by Supplementary Categories
+# fAbuse has levels 0-7.   Barycenters are plotted.  Abuse = 1, 2, 7 are in upper right  half.  Abuse = 0 is in lower half near y axis
+#
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('ind','quali'),select='contrib  171',habillage='fAbuse',title="Abuse by Individual")
+
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali'),select='contrib  171',habillage='fAbuse',title="Abuse by Individual")
+
+```
+
+
+
+### Drug Use
+
+There is strong evidence that Non-substance related drug use is differentiated by the model by not on the principal axes but a tilted version of Dimension 2.   In the plot below, those who responded No to Non-substance related drug use fall mostly on the right half plane.  Thus, Dimension 1 has significant power to differentiate that group.  However, for responses of 1 and 2, those individuals are intermixed in the left half plane.
+
+
+```{r amfa1-NonDx}
+
+# Individuals categorized by NonDx
+# NonDx = 0 clustered on right half plane.
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali','quali.sup'),select='contrib  171',habillage='fNonDx',title="Individual by Non-Substance related Drug Use")
+
+```
+
+
+The plot below shows some clustering of No responses to Substance related Drug Use in the left half plane. Thus Dimension 1 has some ability to differentiate but the cluster boundary looks tilted.
+
+```{r amfa1-SubsDx}
+
+# Individuals categorized by SubsDx
+# no SubsDx use clustered in left side, SubsDx=1 in middle y-axis,  SubsDx=2 in Right half plane, SubsDx=3 is middle and Right vertical half plane
+plot.MFA(res.amfa1, choix="ind",lab.par=TRUE,invisible= c('quali','quali.sup'),select='contrib  171',habillage='fSubsDx',title="Individuals by Substance Related Drugs")
+
+```
+
+```{r eval=F}
+# These are really useful statistics
+
+res.amfa1$group$contrib %>% kable(digits = 1)
+
+res.amfa1$group$RV %>% kable(digits = 2) %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+
+## MFA Wrap-up
+
+The use of MFA in analyzing this mental health dataset has been successful in our opinion.
+The ability to handle both quantitative and qualitatively data in a coherent framework means we don't have
+to shoehorn qualitative data into a quantitative form.   The findings show that mental health responses on ADHD and Mood are secondary to the demographic, education and drug or substance usage  and impulsiveness of the individual.
+Lastly, the ability to differentiate by attempted suicide bodes well for our prediction model using Support Vector Machine.
+
+# Clustering: K-Means and Hierarchical
+
+K-means clustering is a standard method of unsupervised machine learning to identify groups of interest.   We will apply it to analyze the mental health dataset previously considered using MFA.  In fact, we will build on the data preparation phase earlier and use the MFA analysis to interpret the K-means cluster results in this section.  This analysis proceeds as follows.  First, we adapt the previously used dataset for k-means clustering.  Second, we tune the k-means clustering for different values of $k$.  We choose $k=4$ as the optimal number of clusters.  Third, we evaluate the cluster characteristics by visual inspection of their convex hulls and statistical tabulation of numerical properties.   Using this information, we propose and label the 4 cluster profiles.
+
+## Data Preparation
+
+The `kmeans` function has some requirements that differ from the MFA functionality in `FactoMineR` which requires modification to the cleaned dataset used previously.  `kmeans` requires scaled numerical data.  Hence categorical variables have to be omitted (in some cases) or converted to numerical scores.
+
+We omit the use of `fRace`, `fSex` as in the MFA analysis due to political concerns in the cluster construction.  We omit the use of `fAbuse` because it proved uninformative in the MFA analysis.  We omit the use of the survey total scores called `ADHD.Total` and `MD.TOTAL` because we retain their individual scores.
+
+Lastly, all quantitative variables are scaled to mean 0, variance 1 variables stored in a dataframe `kmdfs`.
+
+
+```{r kmdf1}
+
+library(cluster)
+library(factoextra)
+
+kmdf1 = ab %>% dplyr::select( -one_of("ADHD.Total", "MD.TOTAL") ) %>%
+          mutate( nCO       =    ifelse(fCO=="Yes", 1 , 0 ) ,
+                  nHViol    =    ifelse(fHViol == "Yes", 1, 0 ) ,
+                  nDCond    =    ifelse(fDCond == "Yes", 1, 0 ) ,
+                  nSuic     =    ifelse(fSuic == "Yes", 1, 0 ) ,
+                  nNonDx    =    as.integer(fNonDx) - 1 ,
+                  nSubsDx   =    as.integer(fSubsDx) - 1  ) %>%
+dplyr::select( -one_of("fCO", "fHViol", "fDCond" , "fSuic", "fNonDx", "fSubsDx"  ) ) %>%  # Remove factor version
+dplyr::select(-one_of("fAbuse", "fRace", "fSex"))   # Remove political sensitive categories and Abuse
+
+                
+kmdfs =  kmdf1 %>%  mutate_if(is.numeric, scale )
+
+#head(kmdfs) %>% kable(caption="Scaled K-Means DataSet" ,  digits = 2 ) %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+
+Looking at the distance matrix using the `fviz_dist` function in the `factoextra` package we see the variation
+in distances on the dataframe of observations.
+
+```{r distance-matrix}
+
+distance <- get_dist( kmdfs )
+
+fviz_dist(distance, gradient = list(low="#00AFBB", mid="white", high="#FC4E07" ) )
+
+
+```
+
+## Optimal Selection of Number of Clusters
+
+The optimal selection of $k$ is more art than science.  The mental health dataset appears to have high dimensionality so I prefer to use only a few clusters than many.  This allows profiles to be easier to construct and interpret.  
+
+However, we wish to also confirm our intuition with objective approaches to cluster selection.   The two approaches we use are:
+
+   * visual inspection of data clusters plotted against their PCA dimensions 1 and 2  (i.e. on a biplot)
+   * statistical measures of cluster optimization.  We use three: Elbow, Silhouette and Gap.
+
+We invoke the `kmeans` algorithm with $k=2,3,4,5,6$ clusters.   Following the guidance in the [UC Business Analytics R Programming Guide](https://uc-r.github.io/kmeans_clustering) we choose to use `nstart=25` restarts and the traditional Euclidean distance on the dataset.   Restarts are needed in order to mitigate bad random selection of the initial starting centroids.   Within `kmeans` the clusters chosen by each restart are assessed to ensure the best fit.
+
+The below grid shows the 5 model variants.  None of the cluster models seem to find natural boundaries between clusters.   For example, the $k=5$ cluster model had significant overlap between the convex hulls of the green (3) and red (1) clusters.   Only $k=2$ cluster model shows full separation of points by convex hull.  
+
+Looking at the plots below, it seems clear that $k=3$ and $k=4$ are the best candidates.  They have the best balance in non-overlap of convex hulls and naturalness of grouping.
+
+
+```{r kmeans-modelrun}
+
+set.seed(105)
+
+k2 = kmeans(kmdfs, centers = 2 , nstart = 25 )
+k3 = kmeans(kmdfs, centers = 3 , nstart = 25 )
+k4 = kmeans(kmdfs, centers = 4 , nstart = 25 )
+k5 = kmeans(kmdfs, centers = 5 , nstart = 25 )
+k6 = kmeans(kmdfs, centers = 6 , nstart = 25 )
+
+p2 = fviz_cluster(k2, data = kmdfs, geom="point") + ggtitle("k=2")
+p3 = fviz_cluster(k3, data = kmdfs, geom="point") + ggtitle("k=3")
+p4 = fviz_cluster(k4, data = kmdfs, geom="point") + ggtitle("k=4")
+p5 = fviz_cluster(k5, data = kmdfs, geom="point") + ggtitle("k=5")
+p6 = fviz_cluster(k6, data = kmdfs, geom="point") + ggtitle("k=6")
+
+
+library(gridExtra)
+
+grid.arrange(p2, p3, p4, p5, p6, nrow=3)
+
+```
+
+Looking next at the optimal selection of cluster counts, we use the algorithms contained in `factoExtra` and `cluster`.   
+
+*  The Elbow method clearly shows an inflection point at $k=4$ but not at $k=3$.  It seeks to  minimize the within-cluster total variation.   
+*  The Silhouette method suggests $k=2$ and the optimal number of clusters.  [Wikipedia](https://en.wikipedia.org/wiki/Silhouette_(clustering)) has a good technical discussion of the method but the algorithm can be run without knowledge of the theory.  I find $k=2$ too small because there are definitely more than 2 profiles of participants based on the MFA analysis.
+*  The gap statistic is invented by Tibshirani, Walther and Hastie and compares the dataset against a simulated dataset with no cluster.   The gap method suggest an optimal value of $k=7$.
+
+
+```{r km-optimal-cluster-search}
+# Optimal cluster search
+
+set.seed(123)
+
+pdiag1 = fviz_nbclust(kmdfs, kmeans, method="wss") + ggtitle("Elbow Method") + theme(aspect.ratio = 1/3)
+
+
+
+pdiag2 = fviz_nbclust(kmdfs, kmeans, method="silhouette") + ggtitle("Silhouette Method")+ theme(aspect.ratio = 1/3) + xlab("")
+
+
+gap_stat <- clusGap(kmdfs, FUN = kmeans, nstart= 20, K.max = 10, B = 50)
+
+
+pdiag3 = fviz_gap_stat(gap_stat) + ggtitle("Gap Method")+ theme(aspect.ratio = 1/3) + xlab("")
+
+
+grid.arrange(pdiag1, pdiag2, pdiag3, nrow=2)
+
+```
+
+Finally, we decide to adopt $k=4$ as the best number of clusters balancing the challenge of finding credible labels for each cluster with objective methods.  Now we have to consider how to make sense of the clusters.
+
+
+```{r km-finalmodel}
+
+# Final k-means model to adopt
+
+kmfinal = k4
+
+
+```
+
+
+
+## Analysis of K=4 Means Clusters
+
+We analyze the clusters visually by drawing their convex hulls on two biplots.  There are 3 findings.
+
+*  The first biplot uses the coordinates of the points on the MFA dimensions 1 and 2.  Note that the k-means clustering algorithm did not use the same dataset or weighting scheme as MFA so we don't expect perfect concordance.
+
+*  The second biplot compares the k-means clusters on PCA principal axes built using the same dataset.   Notice that the convex hulls have less overlap.
+
+*  More importantly, the groups have been rotated by 90 degrees.  For example, cluster 1 (the smallest with 19 individuals) which is colored red in both biplots has rotated 90 degrees.   In the PCA biplot, cluster 1 is in the South.  In the MFA biplot, cluster 1 is in the West.  This suggests that the PCA dimensions emphasize the survey questions on dimension 1 whereas the MFA analysis prioritized Age, Education and lifestyle factors instead.  The difference is likely a consequence of the different weighting schemes of the PCA.
+
+
+```{r convexhull-biplot}
+
+p4 + ggtitle("K=4 Cluster Interpretation", subtitle = "Mapped to PCA Components") + theme(aspect.ratio = 1)
+
+
+# If you need to install ggConvexHull - need to go to devtools and github
+#library(devtools)
+#devtools::install_github("cmartin/ggConvexHull")
+
+library(ggConvexHull)
+amfa1_xy = data.frame( x = res.amfa1$global.pca$ind$coord[,1], y = res.amfa1$global.pca$ind$coord[,2] ,
+                       lab = as.factor(kmfinal$cluster) )
+
+ggplot(data=amfa1_xy, aes(x=x,y=y)) + geom_point(aes(col=lab)) +  scale_color_brewer(palette = "RdYlBu") + xlab("MFA Dim 1") + ylab("MFA Dim 2") + labs(title="Cluster Interpretation", subtitle="K-Means Clusters mapped to MFA Components")  + geom_convexhull(alpha = 0.3, aes(fill = lab)) + theme(aspect.ratio = 1)
+
+
+```
+
+
+Looking at the within-cluster means of the quantitative variables can help us characterize each cluster.  We show the quantitative variables on the table below.  The top row header (in red) shows the cluster number from 1 to 4.
+
+The key observations from the below table are:
+
+* `ADHD.TOTAL` is very different for each group.  From low to high, Group 2 (Low), Group 4 (Medium), Group 1 (High) and Group 3 (Very High) have ADHD problems.   `MD.TOTAL` also shows differentiation.  It strongly differentiates Group 2 vs. Group 3.  Note that Group 3 has uniformly high scores while Group 2 has uniformly low scores on both surveys.
+
+*  Illegal drug use `Cocaine` and `THC` differentiates Group 1 vs. Groups 2, 3, and 4.
+
+*  Disorderly conduct `fDCond` differentiates Group 1 from Group 4.  While it is high for Group 2 and 3.
+
+
+```{r kmjoin-transpose}
+
+
+kmjoin = cbind( amfa1_xy , ab )
+
+
+kmsummary = kmjoin %>% group_by(lab) %>% summarize_if(is.numeric, "mean") %>% mutate_if(is.numeric, round, digits = 2) %>%
+  dplyr::select( lab, x, y, Age, Education, ADHD.Total, MD.TOTAL,  ADHD.Q8, ADHD.Q10, ADHD.Q7, ADHD.Q9, MD.Q1g, 
+          MD.Q2, MD.Q1b, Alcohol, THC, Cocaine)
+
+t(kmsummary) %>% kable(caption="Cluster Averages for Mental Health Data") %>% kable_styling(bootstrap_options = c("striped", "hover", "bordered"), fixed_thead = T) %>% row_spec(1, bold = T, color = "red")
+
+```
+
+
+The following contingency tables show the cluster groups in each column and the counts and within-cluster frequency of each category.
+We report tables for sex, race, attempted suicide, history of violence, disorderly conduct, substance use, non-substance drug use and will discuss the findings in the next section as we describe cluster profiles.
+
+```{r}
+
+
+kmjoin %>% tabyl(fSex, lab) %>% adorn_totals("row") %>% adorn_percentages("col") %>% adorn_pct_formatting(digits=0) %>% adorn_ns() %>% kable(caption = "Gender vs K=4 Means Clusters") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+kmjoin %>% tabyl(fRace, lab) %>% adorn_totals("row") %>% adorn_percentages("col") %>% adorn_pct_formatting(digits=0) %>% adorn_ns() %>% kable(caption = "Race vs K=4 Means Clusters") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+kmjoin %>% tabyl(fSuic, lab) %>% adorn_totals("row") %>% adorn_percentages("col") %>% adorn_pct_formatting(digits=0) %>% adorn_ns()  %>% kable(caption = "Suicide Attempts vs K=4 Means Clusters") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+kmjoin %>% tabyl(fHViol, lab) %>% adorn_totals("row") %>% adorn_percentages("col") %>% adorn_pct_formatting(digits=0) %>% adorn_ns() %>% kable(caption = "Hist. of Violence vs K=4 Means Clusters") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+kmjoin %>% tabyl(fDCond, lab) %>% adorn_totals("row") %>% adorn_percentages("col") %>% adorn_pct_formatting(digits=0) %>% adorn_ns() %>% kable(caption = "Disorderly Conduct vs K=4 Means Clusters") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+kmjoin %>% tabyl(fSubsDx, lab) %>% adorn_totals("row") %>% adorn_percentages("col") %>% adorn_pct_formatting(digits=0) %>% adorn_ns()  %>% kable(caption = "Substance Use vs K=4 Means Clusters") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+kmjoin %>% tabyl(fNonDx, lab) %>% adorn_totals("row") %>% adorn_percentages("col") %>% adorn_pct_formatting(digits=0) %>% adorn_ns() %>% kable(caption = "Non-substance Drug Use vs K=4 Means Clusters") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Describing Cluster Profiles
+
+For each group, we'll give a narrative description followed by the variables that support the narrative.
+
+**Group 1** are law-abiding, clean living, relatively older, more educated individuals. `fDCond` is lowest for this cluster (26%).
+Attempted suicide `fSuic` is low (10%).  Use of Cocaine (0.11), Alcohol (0.32), THC (0.05) are lowest of all clusters.   Average age is highest (43.58) of all clusters.   Both mental health scores were middle of the range.
+
+**Group 2** has low-key, non-suicidal, disorderly, moderate-heavy users of drugs an alcohol members.  They had the lowest average scores on `ADHD.Total` (15.37) and `MD.TOTAL` (4.46) of all clusters.   Attempted suicide was rarest of all clusters (10%).   Cocaine (1.24) as highest, alcohol (1.27) and THC (.80) were second highest of all clusters.
+
+**Group 3** has high-strung, heavy drinking, suicidal members.   They scored highest of all groups on both mental health survey by some margin `MD.TOTAL` (13.57) and `ADHD.Total` (52.52).  They reported the highest score for alcohol usage (1.89), some THC usage (.72).
+They also had the highest rate of attempted suicide (41%) of all clusters.
+
+**Group 4** has illegal drug users with high rates of suicide attempts and disorderly conduct.  They scored highest on disorderly conduct (93%) and 2nd highest suicide attempts (35%) and highest rate of cocaine use (1.61) and THC (1.14).  Mental health scores were middle of the range on both.
+
+We conclude our discussion of k-means clustering by noting that the dataset is highly non-representative of the general population.
+While the profiles are constructed from direct evidence, how well they will work out-of-sample is unclear and perhaps out of scope in this assignment.
+
+## Hierarchical Clustering Algorithm
+
+We also comment that hierarchical clustering can also be built easily using `FactoMineR` package using the same dataset used for the MFA analysis.  We are able to build a hierarchical tree as shown below in the depicted dendrogram with 4 clusters.
+
+```{r}
+
+res.PCA<-PCA(kmdfs,ncp=10, scale.unit=FALSE,graph=FALSE)
+res.HCPC<-HCPC(res.PCA,nb.clust=4,consol=TRUE,graph=FALSE)
+plot.HCPC(res.HCPC,choice='tree',title='Hierarchical tree')
+```
+The below chart shows the hierarchical cluster mapped onto a biplot using PCA on the dataset of points.
+
+We can see some similarities in the resulting clusters with those generated from the $k=4$ means cluster algorithm.
+
+
+```{r}
+
+plot.HCPC(res.HCPC,choice='map',draw.tree=TRUE,title='Factor map')
+```
+A 3-dimensional view of the hierarchical tree shows the linkages and hierarchy from an elevated point.
+But does not really produce additional insights in my opinion.
+
+```{r}
+plot.HCPC(res.HCPC,choice='3D.map',ind.names=TRUE,centers.plot=FALSE,angle=100,title='Hierarchical tree on the factor map')
+
+
+```
+
+In the table below, we show the contingency table between hierarchical clustering and k-means clustering.
+We conclude that both algorithms end up at similar places when run to 4 clusters total.
+
+The table below shows the number of individuals assigned to a hierarchical method cluster by row and the corresponding k-means cluster by column.
+
+Thus, we see that :
+
+*  hierarchical cluster 1 is assigned to k-means cluster 4.
+*  hierarchical cluster 2 is assigned to k-means cluster 1.
+*  hierarchical cluster 3 is assigned to k-means cluster 2.
+*  hierarchical cluster 4 is dispersed across 3 k-means cluster but mostly goes to cluster 3.
+
+The off-diagonal elements below represent the confusion terms in a non-binary confusion matrix setting.
+
+
+```{r comparison-clustering}
+
+zz = data.frame(hclust = res.HCPC$data.clust$clust, kmclust = kmjoin$lab )
+
+zz %>% tabyl( hclust, kmclust ) %>% adorn_totals("row") %>% adorn_percentages("row") %>% adorn_pct_formatting(digits=0) %>% adorn_ns() %>% kable(caption = "Hierarchical vs K=4 Means Clusters") %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+
+```
+
+# Support Vector Machine for Binary Classification of Suicide Attempt
+
+## Data Extraction and Variable Selection
+
+In researching the specifics of the attention deficit hyperactivity disorder (ADHD) questionnaire (https://add.org/wp-content/uploads/2015/03/adhd-questionnaire-ASRS111.pdf) and the mood disorder (MD) questionnaire (https://www.ohsu.edu/sites/default/files/2019-06/cms-quality-bipolar_disorder_mdq_screener.pdf), derived variables were created and assessed in an attempt to better define the diagnosis of the patient providing the survey answers. Through trial and error the mood disorder questionnaire provided value in determining a suicide attempt. According to the survey explanation, an answer of Yes (1) to seven or more events in question 1, a Yes answer to question 2 and finally a two or three response to question 3 warrants a recommendation for further medical assessment for bipolar disorder. Based on this relationship in the question, a count of the Yes answers to question 1 is calculated. That calculation along with the results of question two and question three are used as inputs to the SVM model. Based on the PCA, abuse and sex were also identified as significant to the determination of suicide attempt. The ADHD total also showed significance to the SVM model, but after several trials, the ADHD total variable was removed as the variable did not improve the model test results.
+
+Create a variable for the count of Yes answers to the events from MD question 1. Also, Sex, Abuse, and MD.Q2 are defined as factor variables instead of character variables. Finally, the dependent variable, Suicide, is also defined as a factor data type. The SVM model requires character or factor variables along with numeric variables.
+
+```{r warning=F, message=F}
+data <- read_csv("New_adhd.csv")
+
+data$MD.Q1.Count <- 0
+data$MD.Q1.Count <- ifelse(data$MD.Q1a == 1, data$MD.Q1.Count+1, data$MD.Q1.Count)
+data$MD.Q1.Count <- ifelse(data$MD.Q1b == 1, data$MD.Q1.Count+1, data$MD.Q1.Count)
+data$MD.Q1.Count <- ifelse(data$MD.Q1c == 1, data$MD.Q1.Count+1, data$MD.Q1.Count)
+data$MD.Q1.Count <- ifelse(data$MD.Q1d == 1, data$MD.Q1.Count+1, data$MD.Q1.Count)
+data$MD.Q1.Count <- ifelse(data$MD.Q1e == 1, data$MD.Q1.Count+1, data$MD.Q1.Count)
+data$MD.Q1.Count <- ifelse(data$MD.Q1f == 1, data$MD.Q1.Count+1, data$MD.Q1.Count)
+data$MD.Q1.Count <- ifelse(data$MD.Q1g == 1, data$MD.Q1.Count+1, data$MD.Q1.Count)
+data$MD.Q1.Count <- ifelse(data$MD.Q1h == 1, data$MD.Q1.Count+1, data$MD.Q1.Count)
+data$MD.Q1.Count <- ifelse(data$MD.Q1i == 1, data$MD.Q1.Count+1, data$MD.Q1.Count)
+data$MD.Q1.Count <- ifelse(data$MD.Q1j == 1, data$MD.Q1.Count+1, data$MD.Q1.Count)
+data$MD.Q1.Count <- ifelse(data$MD.Q1k == 1, data$MD.Q1.Count+1, data$MD.Q1.Count)
+data$MD.Q1.Count <- ifelse(data$MD.Q1L == 1, data$MD.Q1.Count+1, data$MD.Q1.Count)
+data$MD.Q1.Count <- ifelse(data$MD.Q1m == 1, data$MD.Q1.Count+1, data$MD.Q1.Count)
+
+data$fSex <- as.factor(data$fSex)
+data$fSuic <- as.factor(data$fSuic)
+data$fAbuse <- factor(data$fAbuse, levels=c("0","1","2","3","4","5","6","7"), ordered=TRUE)
+data$MD.Q2 <- as.factor(data$MD.Q2)
+
+skim(data)
+```
+
+Based on the final imputed data set, a total of 171 instances exist with Suicide attempts accounting for 49 of the total.
+
+```{r warning=F, message=F}
+# of the 171, Suicide Yes=49, Suicide No=122
+table(data$fSuic)
+```
+
+The data set is initially split into a training and test with 75% of the data used in the training set which equals 129 of the 171 overall instances. The test set consists of 42 instances.
+
+```{r warning=F, message=F}
+# Split into training and test data
+set.seed(123, kind = "Mersenne-Twister", normal.kind = "Inversion")
+# split the data into training (75%) and testing (25%)
+data_split <- initial_split(data, prop = .75)
+data_split
+
+data_train <- training(data_split)
+data_test <- testing(data_split)
+
+data_train
+```
+
+```{r warning=F, message=F}
+# Create CV object from training data
+data_cv <- vfold_cv(data_train, v=5, repeats=3)
+```
+
+## Model Definition
+
+Using tidymodels, the recipe function is used to define the independent variables, Sex, Abuse, MD.Q1.Count, MD.Q2, and Md.Q3 in relationship to the dependent variable, Suicide. In order to properly prepare the numeric and factor data, the recipe includes a step to normalize the numeric data and create dummy variables for the factor data. These steps will ensure proper balance in the measurements of the SVM model.
+
+
+```{r warning=F, message=F}
+# https://www.tidymodels.org/learn/work/tune-svm/
+# 0.8571429 accuracy
+data_recipe <- recipe(fSuic ~ fSex + MD.Q1.Count + MD.Q2 + MD.Q3 + fAbuse, data = data) %>%
+  step_normalize(all_numeric(), -all_outcomes()) %>%
+  step_dummy(all_nominal(), -all_outcomes())  
+```
+
+In order to evaluate the different versions of the SVM models defined, the metrics of ROC AUC, accuracy, and kappa are used.
+
+```{r warning=F, message=F}
+# using roc, accuracy and kappa
+roc_vals <- metric_set(roc_auc, accuracy, kap)
+```
+
+```{r warning=F, message=F}
+# Verbose turned off, save out-of-sample predictions is turned on
+ctrl <- control_grid(verbose=F, save_pred=T)
+```
+
+
+```{r warning=F, message=F, eval=F}
+# SVM Model with Polynomial
+svm_model <- svm_poly(cost = tune(),
+                      degree = tune()) %>% 
+  set_engine("kernlab") %>% 
+  set_mode("classification") %>% 
+  translate()
+```
+
+
+Given the test data set contains 42 instances, and with the current seed value, 31 of the 42 are No for Suicide. By simply picking No, for every selection, an accuracy of 73.8% would be achieved. This accuracy gives a baseline in which to find a more accurate model.
+
+With tidymodels, the SVM model is available using a polynomial kernel or a radial basis function (RBF) kernel. The RBF kernel approach was selected as the function measures the distance between the feature vectors. The kernel value decreases with distance and measures on a scale from zero to one. With the small size of the data set and limited number of variables, the RBF kernel outperformed the polynomial kernel option.
+
+The tidymodels approach allowed for parameter tuning, which in the case of the RBF kernel, the two parameters to the model are cost and rbf_sigma.
+
+- cost: The cost of predicting an instance within or outside of the margin
+
+- rbf_sigma: The precision parameter for the radial basis function
+
+With the opportunity to tune the parameters, a cross-fold validations setting of five folds and three repeats, resulting in 15 separate model combinations proved the most effective in terms of the final result while also keeping the model as simple as possible.
+
+```{r warning=F, message=F, eval=F}
+# SVM Model with Radial Basis Function
+svm_model_tune <- svm_rbf(cost = tune(),
+                     rbf_sigma = tune()) %>%
+  set_mode("classification") %>%
+  set_engine("kernlab") %>% 
+  translate()
+```
+
+```{r warning=F, message=F}
+# SVM Model with Radial Basis Function
+cost_val <- 0.5007102
+rbf_sig_val <- 0.04264253
+
+svm_model <- svm_rbf(cost = cost_val,
+                     rbf_sigma = rbf_sig_val) %>%
+  set_mode("classification") %>%
+  set_engine("kernlab") %>% 
+  translate()
+```
+
+
+## Model Evaluation
+
+The parameter tuning ran a five-fold cross-validation repeated three times. The marginal plot shows each predictor plotted against performance. Both parameters are presented in different log scales to ensure the values along the x-axis are spread evenly for display purposes. As the plot shows, the performance of the two parameters based on the ROC AUC is consistently above 0.650 with several points above 0.700.
+
+The output of the raw metrics shows very poor performance for kappa, with only a couple tuned models resulting in a value above zero. The best results for accuracy show a consistent 0.705, which realistically represents the selection of "No" for every instance.
+
+Finally, the output for the best ROC AUC indicates good performance with the top five results greater than 0.67 and indicate a potential varying selection method as compared to the accuracy metric.
+
+```{r warning=F, message=F, eval=F}
+# Generate recipe
+set.seed(123, kind = "Mersenne-Twister", normal.kind = "Inversion")
+recipe_res <- svm_model_tune %>%
+  tune_grid(data_recipe,
+    resamples = data_cv,
+    metrics = roc_vals,
+    control = ctrl
+  )
+
+# https://www.tidyverse.org/blog/2020/07/tune-0-1-1/
+autoplot(recipe_res, metric="roc_auc") +
+  ggtitle("Parameter Tuning Results")
+```
+
+
+```{r warning=F, message=F, eval=F}
+# Display top combinations
+show_best(recipe_res, metric = "kap")
+```
+
+```{r warning=F, message=F, eval=F}
+# Display top combinations
+show_best(recipe_res, metric = "accuracy")
+```
+
+```{r warning=F, message=F, eval=F}
+# Best setting
+show_best(recipe_res, metric = "roc_auc")
+```
+
+
+```{r warning=F, message=F}
+# Set the workflow
+svm_wf <- workflow() %>%
+  add_recipe(data_recipe) %>%
+  add_model(svm_model)
+```
+
+Based on previous modeling attempts, the kappa metric was used to determine the best tuned model before performing the final predictions. As the kappa results consistently resulted in low values, the decision was made to base the model selection on the ROC AUC metric. In repeated model attempts, the ROC AUC metric proved better at selecting a model with higher accuracy on the test data set. The SVM model based on the RBF kernel with the best ROC AUC contains a cost parameter of 0.501 and an rbf_sigma value of 0.0426.
+
+```{r warning=F, message=F, eval=F}
+# Select best model based on roc_auc
+best_svm <- recipe_res %>%
+  select_best(metric = 'roc_auc')
+
+# view the best svm parameters
+best_svm
+```
+
+```{r warning=F,message=F}
+# finalize workflow
+final_svm_wf <- svm_wf %>%
+  finalize_workflow(svm_model)
+```
+
+The summary of the final SVM model object reiterates the findings and decisions previously described. An SVM model based on the RBF kernel with two recipe steps: normalization of numeric data and creation of dummy variables for factor data. The SVM model will perform classification with a cost parameter value of 0.5007 and an RBF sigma parameter value of 0.0426. The model contains 83 support vectors.
+
+```{r warning=F,message=F}
+# fit the model
+svm_wf_fit <- final_svm_wf %>%
+  fit(data = data_train)
+
+#https://stackoverflow.com/questions/62772397/integration-of-variable-importance-plots-within-the-tidy-modelling-framework
+svm_wf_fit
+```
+
+From the final model fit using the tidymodels workflow process, the fit of the selected model on the trained data results in an accuracy of 85.7% and an ROC AUC of 87.5%.
+
+```{r warning=F,message=F}
+# train and evaluate
+svm_last_fit <- final_svm_wf %>%
+  last_fit(data_split)
+
+svm_last_fit %>% collect_metrics()
+```
+
+## Model Predictions
+
+The ROC AUC of the train and test plot indicate the curves for each data split. Based on the plot, the test data appears to outperform the training data. This result shows overfitting did not occur on the training data as often is the case in model creation.
+
+As SVM models do not produce probabilities naturally, the tidymodels tune_grid approach does provide a form of probability output that does average the results over the replicate out-of-sample predictions. The average of the possible values is then re-normalized to ensure a sum of one in classification models. The kernlab engine uses Platt probabilities as output for the SVM model. Platt scaling relies on fitting a logistic regression model to the classification scores in order to produce a probability instead of a strict classification prediction.
+
+The ROC-AUC plots, in addition to the density plot and single independent variable plots, leverage this feature of the tidymodels framework to assess the appropriateness of the predictions in context of the model.
+
+```{r warning=F,message=F}
+# https://fahadtaimur.wordpress.com/2020/07/19/tuning-svm-in-r-2/
+scored_train <- predict(svm_wf_fit, data_train, type="prob") %>%
+    bind_cols(predict(svm_wf_fit, data_train, type="class")) %>%
+    bind_cols(.,data_train)
+
+scored_test <- predict(svm_wf_fit, data_test, type="prob") %>%
+      bind_cols(predict(svm_wf_fit, data_test, type="class")) %>%
+      bind_cols(., data_test) 
+
+scored_train %>%
+  mutate(model = "train") %>%
+  bind_rows(scored_test %>%
+              mutate(model="test")) %>%
+  group_by(model) %>%
+  roc_curve(fSuic, .pred_No) %>%
+  autoplot() %>%
+    print()
+
+```
+
+For clarity, the confusion matrix of the test data predictions indicates a total of 36 correct selections of the 42 instances. As noted previously, a prediction of "No" for every instance results in an accuracy of 73.8%. This model clearly outperforms the baseline model with an accuracy greater than 85%. The ability of the model to correctly predict 6 "Yes" instances shows the model truly created a maximum margin between the variables in the vector planes.  
+
+```{r warning=F,message=F}
+svm_predictions <- svm_last_fit %>% collect_predictions()
+
+conf_mat(svm_predictions, truth = fSuic, estimate = .pred_class)
+
+svm_predictions
+
+mean(svm_predictions$.pred_class == svm_predictions$fSuic)
+```
+
+The density plot shows the frequency of the predicted "Yes" values across the test data set. The plot does indicate for those true values of "Yes", the density was quite consistent across the predicted "Yes" values. Given this realization, the ability to identify 6 of the 11 true "Yes" results indicates the model can be relied upon to some degree in identifying individuals who have attempted suicide. With the large spike in density for true "No" instances, the model does not suffer in predicting "No" values. Given the propensity of the tuned models to simply always predict "No", the final tuned model achieved success in utilizing the SVM method to properly separate instances based on the classification approach.
+
+```{r warning=F, message=F}
+svm_predictions %>%
+  ggplot() +
+  geom_density(aes(x = .pred_Yes, fill = fSuic),
+               alpha = 0.5)
+```
+
+The final five plots display the performance of the predicted "Yes" value against the individual independent variables separated by the true values for Suicide Attempt.
+
+- The MD.Q1.Count plot shows the values of seven or greater are a reasonable predictor of Suicide Attempt and the SVM model reflects the same.
+
+- The MD.Q2 plot indicates that for a true value of Yes, the variable value is more likely to be 1. A variable value of 1 does not directly indicate a suicide attempt, but a value of 0 very likely indicates no suicide attempt.
+
+- The MD.Q3 plot shows a similar understanding as MD.Q1.Count, in which, for those with a suicide attempt, the value is more likely to be higher, 2 or 3 for this variable.
+
+- The fSex plot does show for suicide attempt a higher volume of female instances. Assessing the true No side of the plot, male instances due result in low predicted Yes values.
+
+- The fAbuse plot clearly shows for those with higher levels of abuse, a predicted "Yes" can result.
+
+```{r warning=F, message=F}
+# https://www.tidymodels.org/learn/work/tune-svm/
+scored_train %>%
+  ggplot(aes(MD.Q1.Count, .pred_Yes, color = fSuic)) +
+  geom_point(show.legend = FALSE) +
+  facet_wrap(~fSuic)
+
+scored_train %>%
+  ggplot(aes(MD.Q2, .pred_Yes, color = fSuic)) +
+  geom_point(show.legend = FALSE) +
+  facet_wrap(~fSuic)
+
+scored_train %>%
+  ggplot(aes(MD.Q3, .pred_Yes, color = fSuic)) +
+  geom_point(show.legend = FALSE) +
+  facet_wrap(~fSuic)
+
+scored_train %>%
+  ggplot(aes(fSex, .pred_Yes, color = fSuic)) +
+  geom_point(show.legend = FALSE) +
+  facet_wrap(~fSuic)
+
+scored_train %>%
+  ggplot(aes(fAbuse, .pred_Yes, color = fSuic)) +
+  geom_point(show.legend = FALSE) +
+  facet_wrap(~fSuic)
+```
+
+
+
+
+# Model Comparison using Logistic Regression
+
+As a baseline, we'll use a logistic regression to compare our results. Using the same variables, same pre-processing steps, and same outcome metrics, we find that the SVM model is superior in both accuracy and ROC AUC. The specificity is the worse at 87% compared to 97% with the SVM, however, the sensitivity was slightly better with one more true positive from the GLM model than the SVM model (64% vs 55%). 
+
+With a sensitive subject such as suicide, we want our model to err on the side of caution. Our acceptance criteria should allow for more false positives and significantly fewer false negatives to be considered a successful model. We want to catch almost every at-risk individual for this to be an effective model. While the GLM model performed better in this respect, there is still minimal utility for a model that misclassifies so many at-risk individuals. 
+
+
+```{r}
+glm_model <- logistic_reg() %>% 
+  set_engine("glm") %>% 
+  set_mode("classification")
+
+glm_wf <- workflow() %>%
+  add_recipe(data_recipe) %>%
+  add_model(glm_model)
+
+glm_fit <- glm_wf %>%
+  last_fit(data_split)
+
+glm_fit %>% collect_predictions() %>% conf_mat(.pred_class, fSuic)
+
+glm_fit %>% collect_metrics()
+```
+
+```{r}
+glm_fit %>%
+  collect_predictions() %>% 
+  mutate(model = "glm") %>%
+  bind_rows(svm_predictions %>%
+              mutate(model="svm")) %>%
+  group_by(model) %>%
+  roc_curve(fSuic, .pred_No) %>%
+  autoplot() %>%
+    print()
+```
+
+
+# Appendices
+
+## References
+
+Abdi, Hervé, and Lynne J. Williams. 2010. “Principal Component Analysis.” John Wiley and Sons, Inc. WIREs Comp Stat 2: 433–59
+(http://staff.ustc.edu.cn/~zwp/teach/MVA/abdi-awPCA2010.pdf)
+
+
+[MFA - Multiple Factor Analysis]
+(http://www.sthda.com/english/articles/31-principal-component-methods-in-r-practical-guide/116-mfa-multiple-factor-analysis-in-r-essentials)
+
+
+Multiple Factor Analysis Playlist for using FactoMineR
+(https://www.youtube.com/playlist?list=PLnZgp6epRBbRX8TEp1HlFGqfMf_AxYEj7)
+
+http://www.rebeccabarter.com/blog/2020-03-25_machine_learning/
+https://stackoverflow.com/questions/62772397/integration-of-variable-importance-plots-within-the-tidy-modelling-framework
+https://github.com/tidymodels/parsnip/issues/311
+https://www.tidymodels.org/learn/work/tune-svm/
+https://stackoverflow.com/questions/8287344/cannot-plot-graph-for-an-svm-model-in-r
+https://stackoverflow.com/questions/23613952/support-vector-machine-visualization-in-r
+https://stackoverflow.com/questions/1142294/how-do-i-plot-a-classification-graph-of-a-svm-in-r
+
+## Disclaimer
+
+The analyses and remarks by the authors of this dataset do not represent their personal opinions on the issues of mental health, education, race, gender, violence, or abuse. The origin of the assigned dataset was not disclosed and should not be viewed as a valid or generalizable sample of any described populations. This analysis should not be taken as medical advice and conclusions cannot be drawn outside the context of the assignment. 
+
+## Code
+
+We summarize all the R code used in this project in this appendix for ease of reading.
+
+
+```{r ref.label=knitr::all_labels(), echo=T, eval=F}
+
+```
+

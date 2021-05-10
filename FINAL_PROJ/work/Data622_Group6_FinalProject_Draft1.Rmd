@@ -1,0 +1,458 @@
+---
+title: "Municipal Crime in Residential Subdivisions"
+author: "Group 6 Final Project Data 622 "
+date: "Submitted by 05/20/2021"
+output:
+  html_document:
+    df_print: paged
+    highlight: pygments
+    number_sections: yes
+    theme: readable
+    toc: yes
+    toc_depth: 3
+    toc_float: no
+    fontsize: 12
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+    number_sections: true
+    df_print: kable
+    highlight: tango
+editor_options:
+  chunk_output_type: inline
+fontsize: 11pt
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+# ---------------------------------
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
+
+```
+
+```{r libraries, include=TRUE}
+
+# Your libraries go here
+
+library(tidyverse) 
+library(ggplot2) 
+library(ggrepel)
+library(kableExtra) 
+library(dplyr)
+
+library(caret)   # Model Framework
+library(skimr)    # Used for EDA
+library(klaR)     # Implemented KNN and Naive Bayes models, etc
+
+# PLEASE ADD YOUR R LIBRARIES BELOW
+# ------------------------------
+library(janitor)  # used for tabyl function
+library(sf)     # used for spatial data load and calculations
+library(tmap)   # used for plotting maps
+
+
+```
+
+
+```{r control-slow-code}
+# Alex:
+# This code chunk is only to be used for conditionally disabling certain
+# very slow model code as I merge different sections and need to frequent recompile
+runSlowChunks = F
+
+```
+
+
+# $\color{red}{\text{Notes for Group 6}}${-}
+
+## Group and Final Project Deadlines
+
+* **Reports Final Drafts:**  $\color{red}{\text{May 16, 2021 Sunday 11:00pm EST}}$
+* **Report Merge:**   May 17, 2021  Monday EST
+* **Youtube Recording**  Prepared and Uploaded:   May 19, 2021  Wed
+* **Project Due Date:**  $\color{red}{\text{Submitted by May 20, 2021 Thursday 11:59pm EST}}$
+
+Please don't run tuning code or calibration code in the final version of your result.
+Just tune the model and give the final working version for inclusion.
+You can either comment out or add an eval=F flag to the relevant code chunk for such code.
+
+## Components
+
+The raw data files are used to generate the cleaned data files.
+The cleaned data files are:  `crimesdiv.geojson` and `div.geojson`.   You will be able to use them for your data science work and ignore the 4 other raw files.  
+
+1.   Exploratory Data Analysis  $\color{red}{\text{Randy}}$
+
+Visualizations are needed
+
+   * Overlay map of census tracts and Town of Cary boundary limits with background tile from real map
+   * Map of weighted average income by residential subdivision with annotations/title.
+   * Map of total number of crimes by residential subdivision with annotations/title.
+
+The eBook Geocomputation with R has a lot of good examples using `tmap` working with `sf`.
+(https://geocompr.robinlovelace.net/adv-map.html#interactive-maps)
+
+   * Bar chart - Total Crime count by month from Jan 2018 - Nov 2020
+   * Heat map - Crime Time by month from Jan 2018 - Nov 2020
+
+Examples of traditional charts and heatmaps specific to crime data (https://rpubs.com/Rjacks14/633448)
+
+   * Small multiples of crime maps by subdivision showing different crime categories.
+   * If possible (optional)  Interactive map showing income and crime by subdivision in shiny or leaflet using `tmap`.
+   
+2.  Unsupervised Analysis  $\color{red}{\text{Phil}}$
+
+    k-means clustering analysis to identify the centroid of each region.   I suggest mapping each region to its equivalent centroid.
+
+Interesting use of k-means clustering along with data visualization.  But the distance metric is badly implemented and I wouldn't follow this metric but the use of only 2 clusters is interesting.
+
+(https://towardsdatascience.com/exploring-clustering-and-mapping-torontos-crimes-96336efe490f)
+
+I suggest working hard to define a distance metric that includes:
+
+  * the type of crime but may bucket the ucr codes into a small number of categories.
+  * median household income
+  * try using 2 (high vs low) and (4 districts) and more as needed.
+  * i.e plain Euclidean distance of the actual points does not seem great.
+
+Cluster the data in 2018 alone.   Re-run on 2019 data and see if the cluster centroids are the still the same.
+Plot both diagrams.  Color code the residential subdivisions in a map showing the k-means.
+
+The benefit of k-means is not having to explain statistical significance or why you did not use spatial correlations.
+
+
+3.  Principal Components Analysis  $\color{red}{\text{Alex}}$
+
+Build a matrix of size 713 X 30 of subdivisions and attributes like crime_type and income.   Run a PCA and interprete the first and second components a la UC-R article for US Arrests.  (https://uc-r.github.io/pca)   Will focus on using 2018 data.
+
+4.  Supervised learning:   Spatial Regression Model  $\color{red}{\text{Alex & TBD}}$
+
+Not sure if we can finish this component by target date.   The challenge is that regression models require handling spatial auto-correlation.   A lot to enjoy!
+
+Rspatial website has a good treatment spatial analysis and the supporting software.
+(https://rspatial.org/raster/analysis/1-introduction.html)
+
+Bivand, Pebesma, Gomez-Rubio **Applied Spatial Data Analysis with R**
+(http://gis.humboldt.edu/OLM/r/Spatial%20Analysis%20With%20R.pdf)
+
+Lansley, Cheshire **An Introduction to Spatial Data Analysis and Visualisation in R**
+(https://spatialanalysisonline.com/An%20Introduction%20to%20Spatial%20Data%20Analysis%20in%20R.pdf)
+
+
+# Introduction {-}
+
+This document analyzes municipal crime data for the Town of Cary, North Carolina using machine learning methods.
+In particular, we examine patterns in crime incidents over crime category and residential subdivision.
+We use both unsupervised machine learning methods to identify clusters and patterns of crime activity and
+supervised methods to predict patterns of activities.
+
+You may wish to turn off the code in section 1
+
+**Section 1** describes the background and data sources.
+
+**Section 2** conducts data wrangling and interpolate data to obtain the dataset for our analysis.
+We construct and describe datasets in later sections.
+
+**Section 3** applies a k-means clustering algorithm to identify crime hot spots
+
+**Section 4** examines principal component analysis of the crime data
+
+**Section 5** examines spatial regression models to predict crime rates using the 2018 training and 2019 test split.
+
+**Section 6** concludes our remarks.
+
+**Section 7** presents our `R` code and technical appendices and references.  
+
+
+# Background and Data Sources
+
+## Background
+
+Cities and towns have good and bad neighborhoods.  One common measure of neighborhood health is the level of crime.   Another is household income.  We wanted to investigate crime and income inequality by neighborhood in a mid-sized town from a statistical learning approach.     Such towns have been less studied than larger metropolitan areas such as San Francisco, Chicago or New York.   Such an investigation needs detailed crime and income data and a suitable definition of neighborhoods.   It also requires the application of statistical learning methods to geospatial data along with the above mentioned attributes.
+
+We investigate the Town of Cary in Wake County, North Carolina.   This is a relatively  prosperous middle sized boom town located in the Research Triangle area of North Carolina where technology and health companies are concentrated. The Town of Cary has an open data initiative.   On the Town's [website](), the Police Department publishes crime incident data compiled by its Police Department, residential subdivision boundary data and town boundaries.   Lastly, recent US Census Bureau American Community Survey (ACS) data on household income is available to measure economic affluence.
+
+$\color{red}{\text{More text to explain structure of the paper goes here.}}$
+
+
+## Data Sources
+
+The data sources consists of 4 data files containing typical numerical and qualitative data and geospatial data.
+
+* Town of Cary Boundary File:  `cary_boundary.geojson` which contains the geographic border information of the town.  
+
+* Census Income Data:   We used the American Community Survey (ACS) dataset for 2018 median household income on census tracts overlapping with the Town of Cary.   
+
+* Residential Subdivisions:   We use the file:  `httpmapstownofcary0.geojson` obtained from the Town of Cary Open data portal to identify approximately 700 residential subdivisions within the Town.   These correspond to neighborhoods of the Town.
+
+* Crime Incident Data from the Cary Police Department:   We use the historical crime from the Town of Cary Police Department as of Nov 30, 2020.   This file contains all historical crime incidents with geospatial data, date, crime category information.   We will use the crime incident data from 2018 to 2020.
+
+
+First we load the relatively small files containing town and residential subdivision and household income data.
+
+```{r geojson-load}
+
+# Load the raw data for the town boundary
+town_raw = sf::st_read("cary_boundary.geojson", quiet = TRUE)
+
+# Load the raw data for the census
+acs_raw = sf::st_read("acs2018_5yr_B19013_14000US37183053513.geojson", quiet = TRUE)
+
+# Load the subdivisions
+div_raw = sf::st_read("httpmapstownofcary0.geojson", quiet = TRUE)
+
+
+```
+
+Then we load the crime incident data.   The raw dataset is quite large and requires some effort to import.
+
+```{r crime-rawdata-load}
+
+cpd_raw = sf::st_read("cpd-incidents.geojson", quiet = TRUE)
+```
+
+After importing all the raw files, we can examine their dimensions and contents below:
+
+```{r raw-dataset-size}
+dataset_sizes = data.frame( town_limits = as.character( dim(town_raw) ) ,
+                            acs_income  = as.character( dim(acs_raw) ) ,
+                            subdivisions = as.character( dim(div_raw) ),
+                            crimes       = as.character( dim(cpd_raw) ) )
+
+dataset_sizes = rbind( dataset_sizes, c("Town of Cary", "Censusreporter.org", "Town of Cary", "Town of Cary Police Department"))
+row.names(dataset_sizes) = c("number rows", "number columns", "source")
+
+
+dataset_sizes %>% kable( caption = "Raw data file dimensions" ) %>% kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+
+## Data Issues and How We Address Them
+
+To conduct this analysis, we had to address both the usual missing or bad data issues but also geospatial and methodological issues.   We review each data source and discuss both types of issues jointly.
+
+
+### Town Boundaries
+
+The Town of Cary straddles two counties and a significant part of the Town is zoned for commercial or business purposes.  However, we determined that the residential subdivisions lie inside the Town thus avoiding the complex issue where subdivisions are split across two municipalities.  This dataset provided in `GeoJson` format is mainly a control during exploratory data analysis.   We rely on the residential subdivisions rather than the town boundary datafile to conduct our statistical learning analyses.
+
+```{r town-adjust}
+#
+# Use the North Carolina NAD83 Projected CRS
+# --------------------------------------------------
+town = st_transform(town_raw, 2264)
+
+```
+
+
+### Residential Subdivisions
+
+
+Residents in Cary typically live in residential subdivisions.   These subdivisions are overseen by homeowner associations (HOA) but are not municipal administrative units.   Such subdivisions are often built on farmland or previously vacant land lacking basic utilities like water, sewage or power prior to the development. Rather residential subdivisions are planned communities constructed by real estate development firms to be sold to homeowners.   
+
+We found and removed 4 subdivisions out of 717 where geometry data is missing.   We added an identity column `div_id` to serve as a primary key because subdivision names did not appear to be unique.   
+
+```{r load-div-raw}
+# Remove any observations (subdivisions) where geometry data is missing.
+#
+div = div_raw %>% filter(  !is.na(st_dimension(div_raw) ) )
+
+print(paste0("raw subdivisions data: ",  nrow(div_raw), " vs. ", "tidied subdivisions data: ", nrow(div)))
+
+# Add an integer identifier to the subdivisions dataframe as there is no unique key (except geometry)
+div = tibble::rowid_to_column(div, "div_id")
+
+# Change the CRS coordinate system from WGS84 to NAD83/North Carolina
+# in order to allow distance measurement, etc.
+div = st_transform(div, 2264)
+
+```
+
+### Census Tract Level Household Income
+
+
+Next, we obtained all census tracts covering the Town of Cary limits.   It was necessary to construct a dataset with 47 census tracts to cover the Town of Cary limits.   However, census tracts don't generally align with residential subdivisions.  Therefore, multiple census tracts may partition a residential subdivision.   The data was obtained from the non-profit censusreporter.org website as a Geojson file.   There was no missing data but the median household income data element was renamed from the obscure `B19013001` to `income` for clarity.   The data comes from the 2018 ACS dataset.   We display some representative rows below while simplifying the dataset further.
+
+Lastly, the table below shows the median household income in dollars within each census tract based on the ACS 2018 Survey.
+
+```{r acs-crs}
+
+# Change the coordinate system for the ACS survey data to EPSG 2264 North Carolina ft-US
+acs = st_transform(acs_raw, 2264)
+
+acs = acs %>% rename(tract_name = name ) %>% 
+  rename( income = B19013001 ) %>%  dplyr::select( -one_of(c("B19013001..Error") ) )
+
+head(acs, 5) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+Because our goal is to estimate median household income of a residential subdivision using census tract data, the non-alignment of these two geographical datasets poses a challenge.   We estimate the median household income $f(S)$ for a residential subdivision $S$ by taking a weighted average of the median household income of all census tracts $c$ that intersect a given residential subdivision.   More formally, we define:
+
+$$ f(S) = \sum_{ c \cap S \neq \emptyset }  \frac{\mu(c \cap S) }{\mu(S)} \text{Income}(c) $$
+where $\mu(A)$ is the area of a region $A$.
+ 
+To construct this weighted average requires geospatial intersections and dataframe joins which we do using
+the `sf` geospatial library and `tidyverse` for typical dataframe operations.
+
+We observe that about 6% of all subdivisions 43 out of 713 belong to more than one census tract.  Of those, only 4 belong to 3 census tracts.  Moreover, the median household income range across the census tracts is not extreme.   
+
+```{r acs-income-range}
+summary(acs$income)
+```
+
+The lowest income is \$48,314 while the highest is \$169,600 with a median of $109,628.
+
+
+```{r acs-intersection}
+#  Calculation all the intersections between census tracts and
+#  residential subdivisions
+#
+div_acs_partition = st_intersection( div, acs)
+
+dim(div_acs_partition)
+```
+
+We compute the weighted average income below and then save its value back to the residential subdivision dataset.   Sample rows are illustrated below.
+
+```{r area-weighting}
+df_div_acs_areas = data.frame( area = as.numeric( st_area(div_acs_partition) ), 
+                               tract_name = div_acs_partition$tract_name ,
+                               name = div_acs_partition$name,
+                               div_id = div_acs_partition$div_id, 
+                               income = div_acs_partition$income ) 
+df_div_acs_areas %>% group_by(div_id) %>%
+                   summarize(avg_income = weighted.mean(income, area) ,
+                             count = n(),
+                             max_id = max(div_id) 
+                             ) -> div_avg_income
+
+div %>% dplyr::left_join( div_avg_income, by = 'div_id') %>% 
+  dplyr::select( div_id, category, name, 
+                  shape_stlength, shape_starea, approvedlots, description, geo_point_2d, 
+                 avg_income, geo_point_2d) -> div
+
+head(div, n = 3 ) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover") )
+
+```
+
+
+### Crime Incidents 
+
+Crime incident data is a large historical dataset.  The raw data file, obtained in Dec 2020, contains crime incident data from 1977 to 2020.   We have decided to use only the most recent years (2018-2020).
+
+This time limitation still produces a large number of observations (over 13000) but avoids two problems.
+One is the data quality issues arising from inconsistent reporting especially during its early years. The second, equally important, is that the Town has grown rapidly from the early 2000s.  New residential subdivisions have sprouted up over the last two decades.   Thus, the absence of crime in a residential subdivision could mean that it was not yet built.   Unfortunately, we don't have historical data on the creation of residential subdivisions.  So we are restricted to doing a point-in-time study.
+
+We also filter the incidents by data quality.   A significant number of crime incidents lack geometry data which means we cannot find the location within a subdivision.   We purge those observations but they are less than half.  In recent years, we find geospatial data to be quite completely.
+
+Lastly, we restrict the crime dataset to those incidents occuring in the residential zones of the town.   Roughly forty percent of crime appears to occur in commercial, business or non-residential zones.   These are incidents within the town limits but not within any residential subdivision.  These are important for quality of life issues within the town but less important for differentiating between residential subdivisions.
+
+
+```{r clean-crimes}
+
+# Only use the years 2018-2020 and drop those with missing or invalid geometry information.
+#
+cpd2018_2020 = cpd_raw %>% filter( !is.na(st_geometry(cpd_raw)))  %>%
+                    filter(!is.na(st_dimension(cpd_raw))) %>%
+                     filter(  year == "2018" | year == "2019" | year == "2020" ) # %>%  slice(1:10)
+
+crimes = cpd2018_2020 %>% dplyr::select(incident_number, newdate, year, 
+                                        ucr , crime_type, crime_category, offensecategory, 
+                                        lon, lat, geocode, district)
+
+# Change the coordinate system to NAD83/North Carolina ft US
+crimes = st_transform(crimes, 2264)
+
+dim(crimes)
+
+head(crimes[c(1,3000,4000,6000), c("incident_number", "newdate", "ucr", "crime_type", "crime_category", 
+                                   "geocode", "district")], n=4) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+
+In the data table above, we illustrate some representative rows and columns from the crime data table.  We briefly comment on the columns:
+
+*  The `incident_number` serves as the unique key in the crime dataset.   
+*  The crime is recorded on `newdate`.   
+*  The `ucr` code follows the FBI Uniform Crime Reporting Program standards in classifying incidents but also uses a small number of non-standard codes which appear to be unique to the Town. 
+*  The `crime_type` is the most granular but has a many-to-one relationship to the `ucr` code.
+*  The `district` represents one of the four council districts which partitions the Town.
+
+Finally, we inner join the crime incidents data to the residential subdivision and median household income data previously discussed to obtain our cleansed dataset `crimes_div`.   We can see below that the total number of crimes in 2018 , 2019 and a partial 2020 are quite stable below.
+
+```{r crimes-join-divs}
+crimesdiv = st_join(crimes, div, join = st_within , left = FALSE)
+
+dim(crimesdiv)
+
+crimesdiv %>% group_by(year) %>% summarize(count=n())
+```
+Finally, we export the enriched crimes data and residential subdivision dataset for re-use later.
+
+```{r export-crimesdiv, eval=T}
+
+sf::st_write(crimesdiv, "crimesdiv.geojson", append = FALSE, delete_dsn = TRUE, quiet = TRUE)
+sf::st_write(div, "div.geojson", append = FALSE, delete_dsn = TRUE, quiet = TRUE)
+```
+
+### Coordinate Transformations
+
+We change the coordinate reference system from a geometric crs to a projected CRS on all datasets.   We see EPSG=2264 which is the NAD83/North Carolina coordinate system commonly used by the state agencies.  The transition from a geographic CRS to a projected CRS means distances and areas are easier to measure.  EPSGO.io (https://epsg.io/2264-15835)  states the projection accuracy is within 1.0 meter on a bounding box around the entire state.
+
+### Cleansed Crime Data
+
+In this final section, we reload the cleansed data files representing the two dataframes for our modeling work.  We load `crimesdiv` which contains the crime incident data enriched with geographical location, associated residential subdivision and weighted average median household income.   We also load the dataset of residential subdivisions `div`.
+
+```{r reload-cleanfiles}
+
+crimesdiv = st_read("crimesdiv.geojson")
+
+div = st_read("div.geojson")
+
+```
+
+# Visualization and Statistical Summary
+
+
+# k-Means Clustering 
+
+
+
+# Principal Components Analysis
+
+
+
+# Geographic Weighted Regression
+
+
+# Conclusion
+
+# Appendices
+
+## References
+
+National Incident-Based Reporting System (NIBRS) codes are described in the 2019 update:
+(https://www.fbi.gov/file-repository/ucr/ucr-2019-1-nibrs-technical-specification.pdf/view)
+
+Vignettes for the use of `sf` package in R by Edzer Pebesma:
+(https://r-spatial.github.io/sf/articles/)
+
+[Crime Prediction & Monitoring Framework Based on Spatial Analysis]
+(https://www.sciencedirect.com/science/article/pii/S187705091830807X)
+
+[Kounadi, Ristea, et al.(2020). A systematic review on spatial crime forecasting. Crime Science 9:7](https://doi.org/10.1186/s40163-020-00116-7)
+
+
+
+## Disclaimer
+
+## Code
+
+We summarize all the R code used in this project in this appendix for ease of reading.
+
+
+```{r ref.label=knitr::all_labels(), echo=T, eval=F}
+
+```
+

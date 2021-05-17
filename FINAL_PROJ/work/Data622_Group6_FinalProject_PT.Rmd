@@ -52,6 +52,11 @@ library(sf)     # used for spatial data load and calculations
 library(tmap)   # used for plotting maps
 
 
+library(tidymodels)
+library(cluster)
+library(factoextra)
+library(ggmap)
+library(gridExtra)
 ```
 
 
@@ -416,6 +421,855 @@ div = st_read("div.geojson")
 
 
 # k-Means Clustering 
+
+# Unsupervised learning
+
+To evaluate the relationship between income and crime rates in Cary, this analysis applies the k-means clustering approach to the given data set. K-means clustering is an unsupervised machine learning algorithm that separates the data into k clusters in which the value of k is supplied beforehand. Each cluster is defined by the centroid, or numeric center of the cluster based on the mean of points comprising the cluster.
+
+The analysis uses the standard algorithm, the Hartigan-Wong algorithm, which calculates the within-cluster variation as the sum of squared distances between the points and the assigned cluster's centroid. The analysis relies on Euclidean distance to maintain simplicity. For evaluating the k-means model, the total within-cluster sum of squares measures, referred to as the the compactness or goodness of the model, is to be as small as possible.
+
+Initial attempts to use the geospatial data in the k-means algorithm itself proved less than optimal as the geospatial appeared to skew the results which rely on a Euclidean distance metric. Instead, the geospatial data is not used in the k-means model clustering, but later used to plot the crime instances on map based on cluster.
+
+Additionally, early attempts to derive the k-means model based on more than two independent variables proved difficult to interpret as the k-means algorithm uses dimensions to define the clusters. To overcome this challenge of interpretability, the decision was made to only use two independent variables per model in order to provide clear understanding of the relationship between the two variables and clear comprehension of the resulting k clusters. For each model, the subdivision median income and a defined crime count comprise the inputs.
+
+First, the analysis attempts to describe a relationship between the subdivisions of Cary by income and total crime count for the years 2018 and 2019. Then, the cluster models are built off median income and count of assaults or theft by subdivision in attempt to better understand the areas with propensity for crime.
+
+```{r warning=F, message=F}
+crimesdiv = st_read("crimesdiv.geojson")
+
+df.2018 <- crimesdiv %>% filter(year == "2018")
+df.2019 <- crimesdiv %>% filter(year == "2019")
+```
+
+## Data evaluation
+
+For the calendar year 2018, the city of Cary has 2,188 reported crimes occurring in 485 unique subdivisions as defined by the $div_id$.
+
+```{r warning=F, message=F}
+
+div_id_uniq <- unique(df.2018$div_id)
+length(div_id_uniq) # for 2018, 485 unique div id
+```
+
+```{r warning=F, message=F}
+df.2018.1 <- df.2018 %>%
+        group_by(div_id) %>%
+        summarise(avg_inc = mean(avg_income), n = n())
+```
+
+```{r warning=F, message=F}
+sum(df.2018.1$n)
+# n() gave the count, as each row is a "crime" ... but, if there are repeating incident numbers, let's try to pare down by unique incident number
+```
+
+```{r warning=F, message=F}
+#Year 2018
+df.2018.2 <- df.2018 %>% as.data.frame %>%
+        group_by(div_id) %>%
+        summarise(avg_inc = mean(avg_income), n = length(unique(incident_number)))
+
+df.2018.2$div_id <- as.character(df.2018.2$div_id)
+
+# turn div_id into row names
+df.2018.2 <- df.2018.2 %>%
+         column_to_rownames('div_id')
+
+#Year 2019
+df.2019.2 <- df.2019 %>% as.data.frame %>%
+        group_by(div_id) %>%
+        summarise(avg_inc = mean(avg_income), n = length(unique(incident_number)))
+
+df.2019.2$div_id <- as.character(df.2019.2$div_id)
+
+# turn div_id into row names
+df.2019.2 <- df.2019.2 %>%
+         column_to_rownames('div_id')
+```
+
+Based on data inspection, the incident number is not unique by crime instance. To remove any redundancy of crime counts, the resulting number of unique crimes per incident number is 1,965 for Cary in 2018.
+
+```{r warning=F, message=F}
+sum(df.2018.2$n)
+```
+
+Despite the lack of readability due to the large number of subdivisions, the distance matrix below based on the classical method of Euclidean distance measure finds plenty of large dissimilarities as evidenced by red along with fairly similar subdivisions as seen in blue. The distance matrix confirms enough dissimilarity exists to continue with the k-means clustering approach.
+
+```{r warning=F, message=F}
+distance <- get_dist(df.2018.2)
+fviz_dist(distance, gradient = list(low = "#00AFBB", mid = "white", high = "#FC4E07"))
+```
+
+## Baseline Model
+
+As an initial attempt of the k-means algorithm, a model of just two clusters is attempted to define a baseline for later models. Note, as the k-means algorithm requires all numeric data, the data is scaled before included in the model to ensure outliers do not weigh too heavily on the model's outcome as the model is based on Euclidean distance measurements.
+
+```{r warning=F, message=F}
+# Scale the data so the kmeans algorithm doesn't give too much weight to outliers
+df.2018.2.prescale <- df.2018.2
+df.2018.2 <- scale(df.2018.2)
+
+df.2019.2.prescale <- df.2019.2
+df.2019.2 <- scale(df.2019.2)
+```
+
+
+```{r warning=F, message=F}
+k2 <- kmeans(df.2018.2, centers=2, nstart=25)
+str(k2)
+```
+
+With a simple baseline model of two clusters, the model results in the following composition.
+
+- cluster: The vector of 485 integers indicating the cluster for each point in the initial dataframe.
+
+- centers: The matrix of the two centers.
+
+- totss: The total sum of squares result is 968.
+
+- withinss: The vector of within-cluster sum of squares results in 209 and 404 for the two clusters.
+
+- tot.withinss: The key metric, the total within-cluster sum of squares is 612.
+
+- betweenss: The between-cluster sum of squares (totss- tot.withinss) is 356.
+
+- size: The number of points in each cluster is 287 and 198.
+
+The standard pairwise scatterplot illustrates the two clusters based on the original variables of average income ($avg_inc$) and total crime count ($n$). As seen below, the scatterplot does not separate in way to provide a clear interpretation as the cluster do not directly overlap but appear to separate based primarily on average income.
+
+```{r warning=F, message=F}
+fviz_cluster(k2, data=df.2018.2)
+```
+
+Given the lack of clarity with the two-cluster baseline model, k-means models are generated with cluster sizes of 3-5.
+
+```{r warning=F, message=F}
+k3 <- kmeans(df.2018.2, centers = 3, nstart = 25)
+k4 <- kmeans(df.2018.2, centers = 4, nstart = 25)
+k5 <- kmeans(df.2018.2, centers = 5, nstart = 25)
+
+# plots to compare
+p1 <- fviz_cluster(k2, geom = "point", data = df.2018.2) + ggtitle("k = 2")
+p2 <- fviz_cluster(k3, geom = "point",  data = df.2018.2) + ggtitle("k = 3")
+p3 <- fviz_cluster(k4, geom = "point",  data = df.2018.2) + ggtitle("k = 4")
+p4 <- fviz_cluster(k5, geom = "point",  data = df.2018.2) + ggtitle("k = 5")
+
+grid.arrange(p1, p2, p3, p4, nrow = 2)
+```
+
+With more clusters, a clear differentiation between each cluster appears improving the ability to define each cluster by average income and total count of crime,
+
+## Selecting k clusters
+
+With the requirement of pre-determined cluster counts before running the model, an assessment of the cluster sizes is needed to select the final k cluster number.
+
+First, the elbow method is used by calculating for each k, 1-10, the total within-cluster sum of square (wss). A clear "elbow" appears at 3 k clusters.
+
+```{r warning=F, message=F}
+set.seed(123)
+fviz_nbclust(df.2018.2, kmeans, method = "wss")
+```
+
+Next, the average silhouette method which suggests an optimal number of 10 k clusters.
+
+```{r warning=F, message=F}
+set.seed(123)
+fviz_nbclust(df.2018.2, kmeans, method = "silhouette")
+```
+
+Finally, the gap statistic method recommends a size of 1 cluster. Given the goal of creating clusters or categories, 1 is not a reasonable suggestion.
+
+```{r warning=F, message=F}
+set.seed(123)
+gap_stat <- clusGap(df.2018.2, FUN = kmeans, nstart = 25,
+                    K.max = 10, B = 50)
+fviz_gap_stat(gap_stat)
+```
+
+```{r warning=F, message=F}
+# Extracting results going with 5
+set.seed(123)
+final.18 <- kmeans(df.2018.2, 5, nstart = 25, algorithm="Hartigan-Wong")
+final.19 <- kmeans(df.2019.2, 5, nstart = 25, algorithm="Hartigan-Wong")
+```
+
+In an attempt to compare k-means algorithms, the PAM clustering function was considered as part of the analysis. The resulting plot of 4 clusters very nearly matches the kmeans clustering function from above. An attempt at 5 clusters with the PAM algorithm only divided the sections along the x axis, in essence using income more than crime count. After comparison, the PAM algorithm did not prove better than kmeans, thus the analysis continues to rely on the kmeans implementation.
+
+```{r warning=F, message=F}
+# Extracting results going with 4
+set.seed(123)
+final.18_pam <- pam(df.2018.2, 4, metric = "euclidean", stand = FALSE)
+```
+
+```{r warning=F, message=F}
+# Basic plot
+fviz_cluster(final.18_pam, data = df.2018.2)
+```
+
+Using the 5-cluster model with the kmeans algorithm from above, the $custplot$ function plots the resulting clusters along with the explanation that the two components explain 100% of the point variability. The 100% result is expected based on the use of only two input variables.
+
+```{r warning=F, message=F}
+clusplot(df.2018.2, final.18$cluster, color=T, shade=T, labels=1, lines=0)
+```
+
+After consideration of the model results and goals of this analysis, the 5-cluster kmeans model is selected despite the suggestions of the optimal cluster evaluations. The 5 clusters can easily be interpreted as:
+
+- Low income, low crime rate
+
+- Medium income, low crime rate
+
+- High income, low crime rate
+
+- Medium crime rate
+
+- High crime rate
+
+```{r warning=F, message=F}
+# Basic plot
+fviz_cluster(final.18, data = df.2018.2)
+```
+
+```{r warning=F, message=F}
+str(final.18)
+```
+
+For the final 5-cluster kmeans model, the model definition includes:
+
+- totss: 968 - same as the 2-cluster model as expected.
+
+- withinss: All 5 values below 60, much better than the 209 and 404 from the baseline.
+
+- tot.withinss: 211, a marked improvement from the 612 of the baseline, as this is the key metric for assessing the model.
+
+- betweenss: 757, a result much higher than compared to the baseline model, another improved metric
+
+- size: The five clusters result in counts of 119, 53, 6, 110, 197. Three clusters contain more than 100 instances, one cluster with roughly 50 and a final a outlier cluster with just 6 instances. Despite the incongruity of the cluster counts, the outlier cluster represents the high crime count and thus will help provide clarity in finding the crime hot spots.
+
+## Final Models
+
+Based on the selection of 5 k clusters, the models are generated for the years 2018 and 2019 to compare the year-to-year relationship. With each subdivision labeled for one of the 5 clusters, the initial list of crimes are then mapped to a single cluster based on the subdivision of the crime. The resulting maps of crime occurrences in Cary for 2018 and 2019 portray each crime as color coded for the cluster of the corresponding subdivision.
+
+To better understand each cluster, the centroid values are calculated against the prescaled data. For the year 2018, the results are as follows.
+
+- Cluster 1: Low income ($65950), low crime count (2.79)
+
+- Cluster 2: Medium crime count (11.9)
+
+- Cluster 3: High crime count (28.2)
+
+- Cluster 4: High income ($146763), low crime count (2.92)
+
+- Cluster 5: Medium income ($106938), low crime count (2.60)
+
+```{r warning=F, message=F}
+df.2018.2.prescale <- as.data.frame(df.2018.2.prescale)
+df.2018.2.prescale %>%
+  mutate(Cluster = final.18$cluster) %>%
+  group_by(Cluster) %>%
+  summarise_all("mean")
+```
+
+For the year 2019, the results are as follows.
+
+- Cluster 1: Low income ($65134), low crime count (2.62)
+
+- Cluster 2: High crime count (21.6)
+
+- Cluster 3: Medium income ($106687), low crime count (2.34)
+
+- Cluster 4: Medium crime count (9.53)
+
+- Cluster 5: High income ($147120), low crime count (2.54)
+
+```{r warning=F, message=F}
+df.2019.2.prescale <- as.data.frame(df.2019.2.prescale)
+df.2019.2.prescale %>%
+  mutate(Cluster = final.19$cluster) %>%
+  group_by(Cluster) %>%
+  summarise_all("mean")
+```
+
+Both 5-cluster models result in the same five understood clusters, yet the kmeans model does not result in the same order between the two models - an interesting artifact of the kmeans algorithm as each model is generated independently and the results are quite similar.
+
+```{r warning=F, message=F}
+dfX.18 <- data.frame('div_id' = names(final.18$cluster), 'cluster' = final.18$cluster)
+rownames(dfX.18) <- NULL
+
+dfX.19 <- data.frame('div_id' = names(final.19$cluster), 'cluster' = final.19$cluster)
+rownames(dfX.19) <- NULL
+```
+
+
+```{r warning=F, message=F}
+# Join on div_id to add cluster by each subdivision
+
+df.2018$div_id <- as.character(df.2018$div_id)
+df.2018 <- left_join(df.2018, dfX.18, by='div_id')
+
+df.2019$div_id <- as.character(df.2019$div_id)
+df.2019 <- left_join(df.2019, dfX.19, by='div_id')
+```
+
+The below map plots every reported crime in Cary for 2018 with the color corresponding to the category of the subdivision using median income and total crime count as input to the clustering. The map shows the clear distinctions of the low, medium and high income sections of the city. The crime hot spots do appear in the northeastern section of the city. The medium crime count areas do appear interspersed throughout the city. Given a medium median crime count of less than 12, then even in these subdivisions, the count is less than one crime per month.
+
+```{r warning=F, message=F}
+(map <- get_map(c(left = -78.95, bottom = 35.64, right = -78.72, top = 35.87)))
+ggmap(map) +
+  geom_point(data=df.2018, aes(x=lon, y=lat, color=factor(cluster, labels = c("Low income, low crime count", "Medium crime count", "High crime count", "High income, low crime count", "Medium income, low crime count"))), size=0.5) +
+  xlab(expression(paste("Longitude (", degree,"W)"))) +
+  ylab(expression(paste("Latitude (", degree,"N)"))) +
+  labs(color = "Clusters") +
+  ggtitle("Total Crimes Clustered by Subdivision (2018)")
+
+```
+
+The 2019 crime map of Cary based on subdivision category appears quite similar to the 2018 map. Given the difference of one year, the similarity is expected.
+
+```{r warning=F, message=F}
+(map <- get_map(c(left = -78.95, bottom = 35.64, right = -78.72, top = 35.87)))
+ggmap(map) +
+  geom_point(data=df.2019, aes(x=lon, y=lat, color=factor(cluster, labels = c("Low income, low crime count", "High crime count", "Medium income, low crime count", "Medium crime count", "High income, low crime count"))), size=0.5) +
+  xlab(expression(paste("Longitude (", degree,"W)"))) +
+  ylab(expression(paste("Latitude (", degree,"N)"))) +
+  labs(color = "Clusters") +
+  ggtitle("Total Crimes Clustered by Subdivision (2019)")
+
+```
+
+## Specific crimes
+
+In an attempt to tease out the locations for certain types of crimes, the above approach of defining each crime by the corresponding subdivision's median income and total crime count is applied separately to crimes labeled as assault and theft. The category of assault is comprised of aggravated assault and simple assault. The category of theft is defined by the sum of larceny, stolen property and motor vehicle theft. For the specific crime models, the years 2018 through 2020 are considered.
+
+```{r warning=F, message=F}
+df.18 <- crimesdiv %>% filter(year == "2018")
+df.19 <- crimesdiv %>% filter(year == "2019")
+df.20 <- crimesdiv %>% filter(year == "2020")
+```
+
+```{r warning=F, message=F}
+# Create wide DF to then capture the totals for theft and assault
+# Year: 2018
+df.18.wide <- spread(df.18, offensecategory, ucr)
+colnames(df.18.wide)[which(names(df.18.wide) == "Aggravated Assault")] <- "Ag.As"
+colnames(df.18.wide)[which(names(df.18.wide) == "Simple Assault")] <- "Sim.As"
+colnames(df.18.wide)[which(names(df.18.wide) == "Stolen Property")] <- "Sto.Prop"
+colnames(df.18.wide)[which(names(df.18.wide) == "Larceny")] <- "Larc"
+colnames(df.18.wide)[which(names(df.18.wide) == "Motor Vehicle Theft")] <- "Mo.Ve.Th"
+df.18.wide$Ag.As <- ifelse(is.na(df.18.wide$Ag.As), 0, 1)
+df.18.wide$Sim.As <- ifelse(is.na(df.18.wide$Sim.As), 0, 1)
+df.18.wide$Sto.Prop <- ifelse(is.na(df.18.wide$Sto.Prop), 0, 1)
+df.18.wide$Larc <- ifelse(is.na(df.18.wide$Larc), 0, 1)
+df.18.wide$Mo.Ve.Th <- ifelse(is.na(df.18.wide$Mo.Ve.Th), 0, 1)
+
+df.19.wide <- spread(df.19, offensecategory, ucr)
+colnames(df.19.wide)[which(names(df.19.wide) == "Aggravated Assault")] <- "Ag.As"
+colnames(df.19.wide)[which(names(df.19.wide) == "Simple Assault")] <- "Sim.As"
+colnames(df.19.wide)[which(names(df.19.wide) == "Stolen Property")] <- "Sto.Prop"
+colnames(df.19.wide)[which(names(df.19.wide) == "Larceny")] <- "Larc"
+colnames(df.19.wide)[which(names(df.19.wide) == "Motor Vehicle Theft")] <- "Mo.Ve.Th"
+df.19.wide$Ag.As <- ifelse(is.na(df.19.wide$Ag.As), 0, 1)
+df.19.wide$Sim.As <- ifelse(is.na(df.19.wide$Sim.As), 0, 1)
+df.19.wide$Sto.Prop <- ifelse(is.na(df.19.wide$Sto.Prop), 0, 1)
+df.19.wide$Larc <- ifelse(is.na(df.19.wide$Larc), 0, 1)
+df.19.wide$Mo.Ve.Th <- ifelse(is.na(df.19.wide$Mo.Ve.Th), 0, 1)
+
+df.20.wide <- spread(df.20, offensecategory, ucr)
+colnames(df.20.wide)[which(names(df.20.wide) == "Aggravated Assault")] <- "Ag.As"
+colnames(df.20.wide)[which(names(df.20.wide) == "Simple Assault")] <- "Sim.As"
+colnames(df.20.wide)[which(names(df.20.wide) == "Stolen Property")] <- "Sto.Prop"
+colnames(df.20.wide)[which(names(df.20.wide) == "Larceny")] <- "Larc"
+colnames(df.20.wide)[which(names(df.20.wide) == "Motor Vehicle Theft")] <- "Mo.Ve.Th"
+df.20.wide$Ag.As <- ifelse(is.na(df.20.wide$Ag.As), 0, 1)
+df.20.wide$Sim.As <- ifelse(is.na(df.20.wide$Sim.As), 0, 1)
+df.20.wide$Sto.Prop <- ifelse(is.na(df.20.wide$Sto.Prop), 0, 1)
+df.20.wide$Larc <- ifelse(is.na(df.20.wide$Larc), 0, 1)
+df.20.wide$Mo.Ve.Th <- ifelse(is.na(df.20.wide$Mo.Ve.Th), 0, 1)
+  
+```
+
+### Evaluation of Assault Counts
+
+Total assaults in Cary by year:
+
+- 2018: 485
+
+- 2019: 474
+
+- 2020: 457
+
+```{r warning=F, message=F}
+df.18.v2 <- df.18.wide %>% as.data.frame %>%
+        group_by(div_id) %>%
+        summarise(Avg.Inc = mean(avg_income), 
+                  Ag.Assault=sum(Ag.As),
+                  Sim.Assault=sum(Sim.As), 
+                  Sto.Prop=sum(Sto.Prop),
+                  Larc=sum(Larc),
+                  Mo.Ve.Th=sum(Mo.Ve.Th))
+
+df.18.v2$div_id <- as.character(df.18.v2$div_id)
+
+# turn div_id into row names
+df.18.v2 <- df.18.v2 %>%
+         column_to_rownames('div_id')
+
+df.18.v2$Total.Assault <- df.18.v2$Ag.Assault + df.18.v2$Sim.Assault
+df.18.v2$Total.Theft <- df.18.v2$Larc + df.18.v2$Sto.Prop + df.18.v2$Mo.Ve.Th
+
+df.18.v2.TotAs <- df.18.v2[,c("Avg.Inc", "Total.Assault")]
+df.18.v2.TotTh <- df.18.v2[,c("Avg.Inc", "Total.Theft")]
+
+dim(df.18.v2.TotAs)
+```
+
+```{r warning=F, message=F}
+df.19.v2 <- df.19.wide %>% as.data.frame %>%
+        group_by(div_id) %>%
+        summarise(Avg.Inc = mean(avg_income), 
+                  Ag.Assault=sum(Ag.As),
+                  Sim.Assault=sum(Sim.As), 
+                  Sto.Prop=sum(Sto.Prop),
+                  Larc=sum(Larc),
+                  Mo.Ve.Th=sum(Mo.Ve.Th))
+
+df.19.v2$div_id <- as.character(df.19.v2$div_id)
+
+# turn div_id into row names
+df.19.v2 <- df.19.v2 %>%
+         column_to_rownames('div_id')
+
+df.19.v2$Total.Assault <- df.19.v2$Ag.Assault + df.19.v2$Sim.Assault
+df.19.v2$Total.Theft <- df.19.v2$Larc + df.19.v2$Sto.Prop + df.19.v2$Mo.Ve.Th
+
+df.19.v2.TotAs <- df.19.v2[,c("Avg.Inc", "Total.Assault")]
+df.19.v2.TotTh <- df.19.v2[,c("Avg.Inc", "Total.Theft")]
+
+dim(df.19.v2.TotAs)
+```
+
+```{r warning=F, message=F}
+df.20.v2 <- df.20.wide %>% as.data.frame %>%
+        group_by(div_id) %>%
+        summarise(Avg.Inc = mean(avg_income), 
+                  Ag.Assault=sum(Ag.As),
+                  Sim.Assault=sum(Sim.As), 
+                  Sto.Prop=sum(Sto.Prop),
+                  Larc=sum(Larc),
+                  Mo.Ve.Th=sum(Mo.Ve.Th))
+
+df.20.v2$div_id <- as.character(df.20.v2$div_id)
+
+# turn div_id into row names
+df.20.v2 <- df.20.v2 %>%
+         column_to_rownames('div_id')
+
+df.20.v2$Total.Assault <- df.20.v2$Ag.Assault + df.20.v2$Sim.Assault
+df.20.v2$Total.Theft <- df.20.v2$Larc + df.20.v2$Sto.Prop + df.20.v2$Mo.Ve.Th
+
+df.20.v2.TotAs <- df.20.v2[,c("Avg.Inc", "Total.Assault")]
+df.20.v2.TotTh <- df.20.v2[,c("Avg.Inc", "Total.Theft")]
+
+dim(df.20.v2.TotAs)
+```
+
+```{r warning=F, message=F}
+# Scale the data
+# Save the data in prescale values for later use
+
+df.18.v2.TotAs.Prescale <- df.18.v2.TotAs
+df.18.v2.TotTh.Prescale <- df.18.v2.TotTh
+
+df.18.v2.TotAs <- scale(df.18.v2.TotAs)
+df.18.v2.TotTh <- scale(df.18.v2.TotTh)
+
+df.19.v2.TotAs.Prescale <- df.19.v2.TotAs
+df.19.v2.TotTh.Prescale <- df.19.v2.TotTh
+
+df.19.v2.TotAs <- scale(df.19.v2.TotAs)
+df.19.v2.TotTh <- scale(df.19.v2.TotTh)
+
+df.20.v2.TotAs.Prescale <- df.20.v2.TotAs
+df.20.v2.TotTh.Prescale <- df.20.v2.TotTh
+
+df.20.v2.TotAs <- scale(df.20.v2.TotAs)
+df.20.v2.TotTh <- scale(df.20.v2.TotTh)
+```
+
+To more easily assess the clustering by count, the tidymodels approach to kmeans clustering generates the plots for k clusters of 1 through 9.
+
+```{r warning=F, message=F}
+# Total Assault
+set.seed(123)
+
+kclusts <- 
+  tibble(k = 1:9) %>%
+  mutate(
+    kclust = map(k, ~kmeans(df.18.v2.TotAs, .x)),
+    tidied = map(kclust, tidy),
+    glanced = map(kclust, glance),
+    augmented = map(kclust, augment, df.18.v2.TotAs)
+  )
+
+clusters <- 
+  kclusts %>%
+  unnest(cols = c(tidied))
+
+assignments <- 
+  kclusts %>% 
+  unnest(cols = c(augmented))
+
+clusterings <- 
+  kclusts %>%
+  unnest(cols = c(glanced))
+
+p1 <- 
+  ggplot(assignments, aes(x = Avg.Inc, y = Total.Assault)) +
+  geom_point(aes(color = .cluster), alpha = 0.8) + 
+  facet_wrap(~ k)
+
+p2 <- p1 + geom_point(data = clusters, size = 10, shape = "x")
+p2
+```
+
+Based on the "elbow method", 3 clusters is the recommendation.
+
+```{r warning=F, message=F}
+ggplot(clusterings, aes(k, tot.withinss)) +
+  geom_line() +
+  geom_point()
+
+```
+
+```{r warning=F, message=F}
+df.18.v2.TotAs.final <- kmeans(df.18.v2.TotAs, centers=3, nstart=25)
+str(df.18.v2.TotAs.final)
+
+df.19.v2.TotAs.final <- kmeans(df.19.v2.TotAs, centers=3, nstart=25)
+str(df.19.v2.TotAs.final)
+
+df.20.v2.TotAs.final <- kmeans(df.20.v2.TotAs, centers=3, nstart=25)
+str(df.20.v2.TotAs.final)
+
+```
+
+Based on the model definition outputs, the resulting tot.withinss for the 3 years:
+
+- 2018: 344
+
+- 2019: 354
+
+- 2020: 297
+
+The results aren't quite as good as the 5-cluster models of the previous section but to be expected given the lower count of k clusters. The three values are close enough in range to consider the model comparisons valid.
+
+```{r warning=F, message=F}
+# Year: 2018
+df.18.v2.TotAs.Prescale <- as.data.frame(df.18.v2.TotAs.Prescale)
+
+df.18.v2.TotAs.Prescale %>%
+  mutate(Cluster = df.18.v2.TotAs.final$cluster) %>%
+  group_by(Cluster) %>%
+  summarise_all("mean")
+
+dfX.18 <- data.frame('div_id' = names(df.18.v2.TotAs.final$cluster), 'cluster'=df.18.v2.TotAs.final$cluster)
+rownames(dfX.18) <- NULL
+```
+
+For 2018, the resulting cluster definitions for crime of assault:
+
+- Cluster 1: High income, low assault count
+
+- Cluster 2: High assault count
+
+- Cluster 3: Low income, low assault count
+
+```{r warning=F, message=F}
+# Year: 2019
+df.19.v2.TotAs.Prescale <- as.data.frame(df.19.v2.TotAs.Prescale)
+
+df.19.v2.TotAs.Prescale %>%
+  mutate(Cluster = df.19.v2.TotAs.final$cluster) %>%
+  group_by(Cluster) %>%
+  summarise_all("mean")
+
+dfX.19 <- data.frame('div_id' = names(df.19.v2.TotAs.final$cluster), 'cluster'=df.19.v2.TotAs.final$cluster)
+rownames(dfX.19) <- NULL
+```
+
+For 2019, the resulting cluster definitions for crime of assault:
+
+- Cluster 1: High income, low assault count
+
+- Cluster 2: High assault count
+
+- Cluster 3: Low income, low assault count
+
+```{r warning=F, message=F}
+# Year: 2020
+df.20.v2.TotAs.Prescale <- as.data.frame(df.20.v2.TotAs.Prescale)
+
+df.20.v2.TotAs.Prescale %>%
+  mutate(Cluster = df.20.v2.TotAs.final$cluster) %>%
+  group_by(Cluster) %>%
+  summarise_all("mean")
+
+dfX.20 <- data.frame('div_id' = names(df.20.v2.TotAs.final$cluster), 'cluster'=df.20.v2.TotAs.final$cluster)
+rownames(dfX.20) <- NULL
+```
+
+For 2020, the resulting cluster definitions for crime of assault:
+
+- Cluster 1: High income, low assault count
+
+- Cluster 2: High assault count
+
+- Cluster 3: Low income, low assault count
+
+```{r warning=F, message=F}
+# Join on div_id to add cluster by each subdivision
+# Year: 2018
+df.18.assault <- df.18 %>% filter(offensecategory == "Simple Assault" | offensecategory == "Aggravated Assault")
+
+df.18.assault$div_id <- as.character(df.18.assault$div_id)
+df.18.assault <- left_join(df.18.assault, dfX.18, by='div_id')
+
+# Year: 2019
+df.19.assault <- df.19 %>% filter(offensecategory == "Simple Assault" | offensecategory == "Aggravated Assault")
+
+df.19.assault$div_id <- as.character(df.19.assault$div_id)
+df.19.assault <- left_join(df.19.assault, dfX.19, by='div_id')
+
+# Year: 2020
+df.20.assault <- df.20 %>% filter(offensecategory == "Simple Assault" | offensecategory == "Aggravated Assault")
+
+df.20.assault$div_id <- as.character(df.20.assault$div_id)
+df.20.assault <- left_join(df.20.assault, dfX.20, by='div_id')
+```
+
+```{r warning=F, message=F}
+# Year: 2018
+(map <- get_map(c(left = -78.95, bottom = 35.64, right = -78.72, top = 35.87)))
+ggmap(map) +
+  geom_point(data=df.18.assault, aes(x=lon, y=lat, color=factor(cluster, labels = c("High Income, Low Assault Count", "High Assault Count", "Low Income, Low Assault Count"))), size=1) +
+  xlab(expression(paste("Longitude (", degree,"W)"))) +
+  ylab(expression(paste("Latitude (", degree,"N)"))) +
+  labs(color = "Clusters") +
+  ggtitle("Assaults Clustered by Subdivision (2018)")
+
+# Year: 2019
+(map <- get_map(c(left = -78.95, bottom = 35.64, right = -78.72, top = 35.87)))
+ggmap(map) +
+  geom_point(data=df.19.assault, aes(x=lon, y=lat, color=factor(cluster, labels = c("High Income, Low Assault Count", "High Assault Count", "Low Income, Low Assault Count"))), size=1) +
+  xlab(expression(paste("Longitude (", degree,"W)"))) +
+  ylab(expression(paste("Latitude (", degree,"N)"))) +
+  labs(color = "Clusters") +
+  ggtitle("Assaults Clustered by Subdivision (2019)")
+
+# Year: 2020
+(map <- get_map(c(left = -78.95, bottom = 35.64, right = -78.72, top = 35.87)))
+ggmap(map) +
+  geom_point(data=df.20.assault, aes(x=lon, y=lat, color=factor(cluster, labels = c("High Income, Low Assault Count", "High Assault Count", "Low Income, Low Assault Count"))), size=1) +
+  xlab(expression(paste("Longitude (", degree,"W)"))) +
+  ylab(expression(paste("Latitude (", degree,"N)"))) +
+  labs(color = "Clusters") +
+  ggtitle("Assaults Clustered by Subdivision (2020)")
+```
+
+Given the small range of three years, the maps for each year appear very similar in identifying the crime hot spots based on assault.
+
+### Evaluation of Total Theft Counts
+
+The same approach as above is followed to cluster the theft counts by subdivision in relationship to median income.
+
+Again, the tidymodels approach is used to cluster for sizes of 1-9. As above, the plot for three clusters follows the same visual distinction as the plot for assault counts. Also, the elbow method recommends three clusters.
+
+```{r warning=F, message=F}
+# Total Theft
+set.seed(123)
+
+kclusts <- 
+  tibble(k = 1:9) %>%
+  mutate(
+    kclust = map(k, ~kmeans(df.18.v2.TotTh, .x)),
+    tidied = map(kclust, tidy),
+    glanced = map(kclust, glance),
+    augmented = map(kclust, augment, df.18.v2.TotTh)
+  )
+
+clusters <- 
+  kclusts %>%
+  unnest(cols = c(tidied))
+
+assignments <- 
+  kclusts %>% 
+  unnest(cols = c(augmented))
+
+clusterings <- 
+  kclusts %>%
+  unnest(cols = c(glanced))
+
+p1 <- 
+  ggplot(assignments, aes(x = Avg.Inc, y = Total.Theft)) +
+  geom_point(aes(color = .cluster), alpha = 0.8) + 
+  facet_wrap(~ k)
+
+p2 <- p1 + geom_point(data = clusters, size = 10, shape = "x")
+p2
+```
+
+```{r warning=F, message=F}
+ggplot(clusterings, aes(k, tot.withinss)) +
+  geom_line() +
+  geom_point()
+
+```
+
+```{r warning=F, message=F}
+df.18.v2.TotTh.final <- kmeans(df.18.v2.TotTh, centers=3, nstart=25)
+str(df.18.v2.TotTh.final)
+
+df.19.v2.TotTh.final <- kmeans(df.19.v2.TotTh, centers=3, nstart=25)
+str(df.19.v2.TotTh.final)
+
+df.20.v2.TotTh.final <- kmeans(df.20.v2.TotTh, centers=3, nstart=25)
+str(df.20.v2.TotTh.final)
+
+```
+
+Based on the model definition outputs, the resulting tot.withinss for the 3 years:
+
+- 2018: 374
+
+- 2019: 348
+
+- 2020: 312
+
+The resulting metrics are in line with the expectations set by the assault results. The overall range gives confidence the model comparisons are valid.
+
+```{r warning=F, message=F}
+# Year: 2018
+df.18.v2.TotTh.Prescale <- as.data.frame(df.18.v2.TotTh.Prescale)
+
+df.18.v2.TotTh.Prescale %>%
+  mutate(Cluster = df.18.v2.TotTh.final$cluster) %>%
+  group_by(Cluster) %>%
+  summarise_all("mean")
+
+dfX.18 <- data.frame('div_id' = names(df.18.v2.TotTh.final$cluster), 'cluster'=df.18.v2.TotTh.final$cluster)
+rownames(dfX.18) <- NULL
+```
+
+For 2018, the resulting cluster definitions for crime of theft:
+
+- Cluster 1: Low income, low theft count
+
+- Cluster 2: High theft count
+
+- Cluster 3: High income, low theft count
+
+```{r warning=F, message=F}
+# Year: 2019
+df.19.v2.TotTh.Prescale <- as.data.frame(df.19.v2.TotTh.Prescale)
+
+df.19.v2.TotTh.Prescale %>%
+  mutate(Cluster = df.19.v2.TotTh.final$cluster) %>%
+  group_by(Cluster) %>%
+  summarise_all("mean")
+
+dfX.19 <- data.frame('div_id' = names(df.19.v2.TotTh.final$cluster), 'cluster'=df.19.v2.TotTh.final$cluster)
+rownames(dfX.19) <- NULL
+```
+
+For 2019, the resulting cluster definitions for crime of theft:
+
+- Cluster 1: High theft count
+
+- Cluster 2: Low income, low theft count
+
+- Cluster 3: High income, low theft count
+
+```{r warning=F, message=F}
+# Year: 2020
+df.20.v2.TotTh.Prescale <- as.data.frame(df.20.v2.TotTh.Prescale)
+
+df.20.v2.TotTh.Prescale %>%
+  mutate(Cluster = df.20.v2.TotTh.final$cluster) %>%
+  group_by(Cluster) %>%
+  summarise_all("mean")
+
+dfX.20 <- data.frame('div_id' = names(df.20.v2.TotTh.final$cluster), 'cluster'=df.20.v2.TotTh.final$cluster)
+rownames(dfX.20) <- NULL
+```
+
+For 2020, the resulting cluster definitions for crime of theft:
+
+- Cluster 1: High income, low theft count
+
+- Cluster 2: Low income, low theft count
+
+- Cluster 3: High theft count
+
+```{r warning=F, message=F}
+# Join on div_id to add cluster by each subdivision
+# Year: 2018
+df.18.theft <- df.18 %>% filter(offensecategory == "Larceny" | offensecategory == "Stolen Property" | offensecategory == "Motor Vehicle Theft")
+
+df.18.theft$div_id <- as.character(df.18.theft$div_id)
+df.18.theft <- left_join(df.18.theft, dfX.18, by='div_id')
+
+# Year: 2019
+df.19.theft <- df.19 %>% filter(offensecategory == "Larceny" | offensecategory == "Stolen Property" | offensecategory == "Motor Vehicle Theft")
+
+df.19.theft$div_id <- as.character(df.19.theft$div_id)
+df.19.theft <- left_join(df.19.theft, dfX.19, by='div_id')
+
+# Year: 2020
+df.20.theft <- df.20 %>% filter(offensecategory == "Larceny" | offensecategory == "Stolen Property" | offensecategory == "Motor Vehicle Theft")
+
+df.20.theft$div_id <- as.character(df.20.theft$div_id)
+df.20.theft <- left_join(df.20.theft, dfX.20, by='div_id')
+```
+
+
+```{r warning=F, message=F}
+# Total thefts
+# Year: 2018
+(map <- get_map(c(left = -78.95, bottom = 35.64, right = -78.72, top = 35.87)))
+ggmap(map) +
+  geom_point(data=df.18.theft, aes(x=lon, y=lat, color=factor(cluster, labels = c("Low Income, Low Theft Count", "High Theft Count", "High Income, Low Theft Count"))), size=1) +
+  xlab(expression(paste("Longitude (", degree,"W)"))) +
+  ylab(expression(paste("Latitude (", degree,"N)"))) +
+  labs(color = "Clusters") +
+  ggtitle("Thefts Clustered by Subdivision (2018)")
+
+# Year: 2019
+(map <- get_map(c(left = -78.95, bottom = 35.64, right = -78.72, top = 35.87)))
+ggmap(map) +
+  geom_point(data=df.19.theft, aes(x=lon, y=lat, color=factor(cluster, labels = c("High Theft Count", "Low Income, Low Theft Count", "High Income, Low Theft Count"))), size=1) +
+  xlab(expression(paste("Longitude (", degree,"W)"))) +
+  ylab(expression(paste("Latitude (", degree,"N)"))) +
+  labs(color = "Clusters") +
+  ggtitle("Thefts Clustered by Subdivision (2019)")
+
+# Year: 2020
+(map <- get_map(c(left = -78.95, bottom = 35.64, right = -78.72, top = 35.87)))
+ggmap(map) +
+  geom_point(data=df.20.theft, aes(x=lon, y=lat, color=factor(cluster, labels = c("High Income, Low Theft Count", "Low Income, Low Theft Count", "High Theft Count"))), size=1) +
+  xlab(expression(paste("Longitude (", degree,"W)"))) +
+  ylab(expression(paste("Latitude (", degree,"N)"))) +
+  labs(color = "Clusters") +
+  ggtitle("Thefts Clustered by Subdivision (2020)")
+```
+
+As expected, the maps for each year are quite similar in location of higher theft crime counts. With the decreased number of clusters, the higher crime count cluster appears to be comprised of the equivalent of the medium and high crime count clusters from the total crime section. Also, the locations of the higher crime counts for assault and theft do appear similar. This assessment does not attempt to indicate one crime leads to another, but simply note the volume of assault and theft crimes do occur in similar locations in Cary.
+
+
+References
+
+- https://uc-r.github.io/kmeans_clustering
+
+- https://www.tidymodels.org/learn/statistics/k-means/
+
+- https://map-rfun.library.duke.edu/01_ggmap_georef.html
 
 
 

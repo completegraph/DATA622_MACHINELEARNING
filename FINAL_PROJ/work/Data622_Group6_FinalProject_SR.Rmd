@@ -50,8 +50,10 @@ library(klaR)     # Implemented KNN and Naive Bayes models, etc
 library(janitor)  # used for tabyl function
 library(sf)     # used for spatial data load and calculations
 library(tmap)   # used for plotting maps
-
-
+library(tidymodels)
+library(FactoMineR)
+library(factoextra)
+library(fastDummies)
 ```
 
 
@@ -383,6 +385,7 @@ Finally, we inner join the crime incidents data to the residential subdivision a
 
 ```{r crimes-join-divs}
 crimesdiv = st_join(crimes, div, join = st_within , left = FALSE)
+crimesLeftJoined = st_join(div, crimes, join = st_contains , left = T)
 
 dim(crimesdiv)
 
@@ -421,6 +424,61 @@ div = st_read("div.geojson")
 
 # Principal Components Analysis
 
+We rejoin the data using the generalized crime categories to allow for situations where no crime withing a division exists of which there are 15. We then create dummy variables for description of the division type. 
+```{r}
+crimesPerDivision<-crimesLeftJoined  %>% as_tibble()%>% dplyr::select(name,crime_category) %>% count(name, crime_category) %>% pivot_wider(names_from = crime_category, values_from=n)%>% replace(is.na(.), 0)
+divWithCrimes <-left_join(div, crimesPerDivision ) %>% as_tibble() %>% dplyr::select(-starts_with ("shape")& -starts_with("geo")) 
+divWithCrimesDummy<-divWithCrimes%>% dummy_columns(select_columns = "description")
+res.PCA <- PCA(divWithCrimesDummy %>% dplyr::select(-category & -description&-name))
+fviz_screeplot(res.PCA)
+```
+Looking at the Scree plot we see a sharp drop off after the first dimension. 
+
+```{r}
+plot.PCA(res.PCA, choix="varcor", autoLab="auto")
+
+```
+We see that there is a definite splitting out of Single Family Detached, and approved Lots. 
+
+```{r}
+plot.PCA(res.PCA, choix="ind",habillage='ind', select='contrib  10',title="Barycenters", cex=.9)
+```
+We see some grouping.
+
+
+```{r}
+pca_var_cor = res.PCA$var$cor[,1]
+pca_var_contrib= res.PCA$var$contrib[,1] 
+
+df_dim1 = data.frame( pca_var_cor, pca_var_contrib)
+df_dim1 %>% ggplot(aes(x=pca_var_contrib, y=pca_var_cor, label=rownames(df_dim1))) + 
+  ggtitle("Dim 1 - Variables Correlations-Explained Covariance") +
+  xlab("% Explained Covariance") + ylab("correlation to Dim 1") +
+  geom_point() + geom_text_repel()
+
+```
+Dimension 1 explained the most but seems dominated by intra crime interactions with the exception of approved lots. 
+
+
+```{r}
+pca_var_cor = res.PCA$var$cor[,2]
+pca_var_contrib= res.PCA$var$contrib[,2] 
+
+df_dim2 = data.frame( pca_var_cor, pca_var_contrib)
+df_dim2 %>% ggplot(aes(x=pca_var_contrib, y=pca_var_cor, label=rownames(df_dim2))) + 
+  ggtitle("Dim 2 - Variables Correlations-Explained Covariance") +
+  xlab("% Explained Covariance") + ylab("correlation to Dim 2") +
+  geom_point() + geom_text_repel()
+
+```
+Dimension 2 seems more focused on splitting town home and single family detached. 
+
+```{r}
+fviz_pca_ind(res.PCA, label="none",habillage = "description_Townhome")
+fviz_pca_ind(res.PCA, label="none", habillage = "description_Single-Family Detached")
+```
+Look at the individual plots we see a clear split of townhomes and especially single family. The lessons of this are a bit unclear. 
+
 
 
 # Geographic Weighted Regression
@@ -428,9 +486,13 @@ div = st_read("div.geojson")
 
 # Conclusion
 
+One further avenue of research would be to look at birth weights which in Masi (2007) are shown to have a relation to crime. 
+
 # Appendices
 
 ## References
+
+Masi, C. M., Hawkley, L. C., Piotrowski, Z. H., & Pickett, K. E. (2007). Neighborhood economic disadvantage, violent crime, group density, and pregnancy outcomes in a diverse, urban population. Social science & medicine, 65(12), 2440-2457.
 
 National Incident-Based Reporting System (NIBRS) codes are described in the 2019 update:
 (https://www.fbi.gov/file-repository/ucr/ucr-2019-1-nibrs-technical-specification.pdf/view)

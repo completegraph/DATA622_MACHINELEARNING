@@ -18,7 +18,11 @@ geocrime <- st_read("https://raw.githubusercontent.com/completegraph/DATA622_MAC
 geodiv <- st_read("https://raw.githubusercontent.com/completegraph/DATA622_MACHINELEARNING/main/FINAL_PROJ/work/div.geojson")
 ```
 
-## Demographics
+## Exploratory Data Analysis
+
+
+
+### Demographics
 ```{r}
 head(geodiv)
 ```
@@ -38,11 +42,23 @@ sum(geodiv$approvedlots)
 plot(geodiv["approvedlots"])
 ```
 
+#### Error
+```{r eval=FALSE}
+library(ggmap)
+map <- get_map(c(left = -78.95, bottom = 35.64, right = -78.72, top = 35.87))
+ggmap(map) +
+  geom_sf(data = geodiv, aes(fill=approvedlots)) +
+  coord_sf(crs = st_crs(2264))
+
+test <- get_map(c(lon = -78.8, lat = 35.75))
+
+```
+
 
 ```{r}
 geodiv2 <- geodiv %>% 
   mutate(avg_lot_area = shape_starea/approvedlots) 
-plot(geodiv["avg_lot_area"])
+plot(geodiv2["avg_lot_area"])
 ```
 
 
@@ -59,10 +75,10 @@ plot(geodiv["avg_income"])
 ```{r}
 geodiv2 <- geodiv2 %>%
   mutate(income_to_lot_area = avg_income/avg_lot_area)
-plot(geodiv["income_to_lot_area"])
+plot(geodiv2["income_to_lot_area"])
 ```
 
-## Crime
+### Crime
 
 ```{r}
 head(geocrime)

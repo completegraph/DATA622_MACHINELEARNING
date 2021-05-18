@@ -50,6 +50,7 @@ library(klaR)     # Implemented KNN and Naive Bayes models, etc
 library(janitor)  # used for tabyl function
 library(sf)     # used for spatial data load and calculations
 library(tmap)   # used for plotting maps
+library(spdep)
 
 
 ```
@@ -423,10 +424,238 @@ div = st_read("div.geojson")
 
 
 
-# Geographic Weighted Regression
+# Spatial Regression
 
+
+The literature on criminal prediction in machine learning describes several ways to apply municipal crime report data. [Kounadi, Ristea, et al.(2020)](https://doi.org/10.1186/s40163-020-00116-7)   One approach predicts crime hot spots in real-time for various types of crimes like burglaries, assaults.  Other approaches look at spatial-temporal patterns across an entire city.  
+
+In this section, we adopt the approach of predicting aggregate crime levels within the residential subdivisions of the town over a single year from static characteristics and past crime levels.  There are two reasons to restrict regression analyses in this manner:
+
+   * the town has expanded dramatically in the last decade - so many neighborhoods did not exist a decade ago.  But, 
+   the data to track town expansion is readily available.
+
+   * this investigation's focus is on the role of the residential subdivision and the role of its spatial dependencies on crime levels.
+   
+This section is organized as follows.   First, we aggregate crime incidents by calendar year and residential subdivisions from the previously constructed incident dataset.   Then, we check for spatial dependencies in the data and then estimate a OLS regression model and a spatial lag model.    Lastly, we interpret the spatial model coefficients and compare them to the OLS coefficients.
+
+## Data Aggregation By Residential Subdivision
+
+We describe data correction and data aggregation steps.
+
+To construct our regression data set, we needed to fix missing values identified in four observations.   Three subdivisions *Arrington Woods*, *Summercrest Two* and *Searstone* lacked values for the feature `approvedlots`.   We estimate a simple linear regression to impute the `approvedlots` from land use `shape_starea` for each subdivision categories which are *Condo*, *Single Family Detached*, and *Mixed Residential*.   In Cary, *Single Family Detached* subdivisions use on average 12244 square feet (or 0.3 acres) per lot while *Condo* and *Mixed Residential* uses much less land per lot since they are often apartment buildings.  The intuitively plausible estimates were cross checked by Internet search of each subdivision.  We show the values in the table below.
+
+
+```{r imputed-lots}
+
+g = lm(div$shape_starea ~ div$approvedlots )
+
+summary(g)
+
+div[which(div$approvedlots == 0), ] %>% dplyr::select(div_id, name, shape_starea, approvedlots)
+
+div$approvedlots[414] = 11   # Arrington Woods  Condo
+div$approvedlots[419] = 33   # Summercrest Two Single Family Detached
+div$approvedlots[706] = 573  # Searstone Mixed residential
+
+impute_approvedlots = data.frame(name = c("Arrington Woods", "Summercrest Two", "Searstone" ),
+                                 category = c("Condo", "Single Family Detached", "Mixed Residential") ,
+                                 approvedlots = c( 11, 33, 573 ) )
+                              
+impute_approvedlots %>% kable(caption="Residential Subdivisions with Imputed Approved Lots") %>% kable_styling( bootstrap_options = c("striped", "hover"))
+
+```
+```{r show-approvedlots}
+
+ggplot(data=div) + geom_point(aes(x=approvedlots, y=shape_starea)) + facet_wrap(~category) + ggtitle("Approved Lots vs. Land Area by Subdivision")
+
+```
+
+One observation *Brickyard* had a missing category which we manually assigned to *Townhome* by an Internet search.  The frequency table of 
+subdivision categories is shown as follows.
+
+```{r impute-brickyard}
+
+div[which(div$name == "Brickyard"),]$category = "Townhome"  # Manually checked that Brickyard is a townhome subdivision and category is NA
+
+table(div$category, useNA='ifany') %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+```{r agg-tot-crimes}
+
+# Save the crime counts by year and residential subdivision
+# Fill the NA values (i.e. no crimes in year X in subdivision R with 0)
+# -------------------------------------------
+divfreq = crimesdiv %>% group_by(div_id, year) %>% summarize( count = n()) %>% 
+  st_drop_geometry() %>% 
+  pivot_wider(names_from = year, values_from = count, values_fill = 0  )
+
+```
+
+Our data aggregation process adds a total incident count column 
+`2018`, `2019`, `2020` for each calendar year to the subdivision dataframe.
+We illustrate the data aggregation visually by density plot below.   The distribution 
+
+```{r join-crime-counts}
+
+regdivdata = div %>% left_join(divfreq, by="div_id") %>% mutate( `2018` = coalesce(`2018`, 0), `2019` = coalesce(`2019`, 0 ), `2020` = coalesce(`2020`, 0 ) )
+
+regdivdata = regdivdata %>% mutate( cr2018 = `2018`/approvedlots, cr2019 = `2019`/approvedlots, cr2020 = `2020`/approvedlots)
+
+#head(regdivdata) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover,"))
+
+regdivdata %>% dplyr::select(div_id, `2018`, `2019` , `2020`) %>% st_drop_geometry() %>% pivot_longer(!div_id, names_to="year", values_to="count" ) %>% ggplot() + geom_density(aes(x=count, fill=year), alpha = 0.3) +
+  ggtitle("Density of Crimes by Annual Count 2018-2020")
+
+```
+
+Lastly, we visualize each year's crime level geographically below.  We can see the clear presence of high crime levels in a small number of subdivisions that persist across the 3 years while most subdivisions are low crime.
+We also see the presence of some clusters that suggest spatial dependencies.
+
+```{r qtm-graphs}
+
+qtm2018 = qtm(regdivdata, "2018") + tm_grid(alpha=0.3)
+
+qtm2019 = qtm(regdivdata, "2019") + tm_grid(alpha=0.3) + tm_compass()
+
+qtm2020 = qtm(regdivdata, "2020") + tm_scale_bar(position=c("center", "bottom" ) ) + tm_grid(alpha=0.3) +
+    tm_credits("Crime Counts \n per \n Residential\n Subdivision\n per Year\nCary, NC" , position=c("left", "center"), width=0.25, align="left" )
+
+qtm2018
+
+qtm2019
+
+qtm2020
+
+#tmap_arrange(qtm2018, qtm2019, qtm2020, asp = 1.5, ncol = 1)
+
+```
+
+## Regressions
+
+We construct regression models to predict crime levels  2019 in terms of static variables and 2018 crime levels.   We run both a standard OLS model that ignores spatial dependencies and a spatial lag model includes those dependencies in the analysis.  The OLS results are reported below.
+
+```{r OLS-gm1}
+
+#gm1 = lm( cr2019 ~ cr2018 + avg_income + approvedlots + shape_starea + factor(category), data = regdivdata)
+```
+
+```{r OLS-gm2}
+
+OLS2 = lm( `2019` ~ `2018` + avg_income + approvedlots + shape_starea + factor(category), data = regdivdata)
+summary(OLS2)
+```
+
+To run a spatial regression, we first have to build a spatial weight matrix based on the dependencies between subdivisions.
+We have a choice of contiguity by region or distanced based locations.   We ruled out two standard methods after experimentation.
+
+  * Regional contiguity left too many isolated subdivisions (over 90) which was unacceptable because these subdivisions would have
+  zero contribution to spatial dependencies.
+  
+  * Distance banded weight matrix - required a very large distance threshold to ensure no isolated subdivisions.
+  
+We settled on a k-nearest neighbor spatial dependency matrix for $k=6$.   Among the neighbors, we define an inverse distance weighted measure and then row-standardized the weights for each observation (subdivision).    In particular, we define the raw weight $rw[i,j]$ of a subdivision $i$ to its neighbor $j$ as:
+
+$$rw[i,j] = \frac{1}{\lVert c(i)-c(j)\rVert^{\alpha}} \text{  where } \alpha = 0.5$$
+Then we define the row standardized weights $w[i,j]$ in a matrix $W$ as:
+
+$$w[i,j] = \frac{rw[i,j]}{\sum_{h=1}^{N} rw[i,h]} \text{ where } N = \text{ number of subdivisions} $$
+
+
+Surprisingly, $\alpha=2$ causes the Lagrange multipler spatial dependency tests to fail to be statistically sigificant whereas $\alpha=1$ and $\alpha=0.5$ produces strong results.  Because the distance-based weights are not scale independent, (we use feet to measure distances), we attribute this statistical significance effect to the fact the decay rate of the weights.   A large $\alpha$ makes the weights decay too fast.
+
+
+[Applications of Spatial Weights: R Notes by Luc Anselin and Grant Morrison]
+(https://spatialanalysis.github.io/lab_tutorials/Applications_of_Spatial_Weights.html#spatially-lagged-variables)
+
+```{r knn-weights}
+
+c_div = st_centroid( st_geometry(div))
+
+k6 = knn2nb( knearneigh(st_centroid( st_geometry(div)), k = 6), row.names = div$div_id)
+
+k6.weights = nb2listw(k6)
+
+wts_k6_a2 = nb2listwdist(k6, c_div, type = "idw", style="W", alpha=0.5)
+
+#summary(wts_k6_a2)
+
+
+#k4 = knn2nb( knearneigh(st_centroid( st_geometry(div)), k = 4), row.names = div$div_id)
+
+#k4.weights = nb2listw(k4)
+
+#wts_k4_a2 = nb2listwdist(k4, c_div, type = "idw", style="W", alpha=0.5)
+
+
+#k3 = knn2nb( knearneigh(st_centroid( st_geometry(div)), k = 3), row.names = div$div_id)
+
+#k2.weights = nb2listw(k3)
+
+#wts_k3_a2 = nb2listwdist(k6, c_div, type = "idw", style="W", alpha=0.5)
+
+
+```
+We plot the spatial weights matrix below with edges in red to show the connection strength and
+each dot representing the centroid of a subdivision plotted by its geographic coordinates.   We see the presence of some connected components but no isolates.
+
+```{r plot-k6, out.width="80%"}
+
+# diagram of the spatial weights linkages.
+#
+plot(wts_k6_a2, c_div, lwd = .5, col = "red", cex = 0.5)
+
+```
+
+To identify the type of spatial regression model to run, we use the Lagrange multipler tests.  To identify the presence of spatial dependencies, we use Moran's I-statistic.  The Lagrange multiplier test for the spatial weights $W$ and above OLS model show that a spatial lag model is appropriate with p-value of 0.88% significance but a spatial errors model is not with a p-value of 86% significance.
+
+```{r lmtest-k6}
+lm.LMtests(OLS2, wts_k6_a2, test = c("LMlag", "LMerr"))
+```
+
+Moran's I statistic on the response variable `2019` crime levels shows spatial dependencies exist.  Clustering exists and is highly statistically significant.  Moran's I statistic shows a value of 0.17 while p-value is nearly 0.
+
+```{r moran.test}
+moran.test( regdivdata$`2019`, wts_k6_a2)
+moran.plot( regdivdata$`2019`, wts_k6_a2)
+
+```
+
+We summarize the spatial lags model below.
+
+```{r spatial-lag-model6}
+spatial.lag.k6a2 = lagsarlm( `2019` ~ `2018` + avg_income + approvedlots + shape_starea + factor(category), 
+                           data = regdivdata , wts_k6_a2 )
+
+summary(spatial.lag.k6a2)
+```
+## Discussion 
+
+The equation defining the model can be written as:
+
+$$y=\rho W y + \mathbf{X}b + u$$
+
+where the response variable $y$ is a $N \times 1$ vector.  $\rho$ is the spatial autoregressive coefficient and $W$ is the $N \times N$ spatial weights matrix described earlier.  $\mathbf{X}$ is the matrix of subdivision level data either crime in 2018 and static characteristic data.  $u$ is the vector of random error terms.
+
+We observe a low but significant spatial dependency between crime levels in adjoining residential subdivisions.
+The spatial lag regression is statistically significant as $\rho = 0.10$ and its p-value $p=1.31\%$ is significant at the 5% level.  
+
+Examining the coefficients, we see the past crime level `2018` is very statistically significant  $p < 2.2 \times 10^{-16}$ at expected sign and magnitude.   Likewise, the number of approved lots is also very significant $p=3.0 \times 10^{-11}$ while the coefficient is positive and small.   Average income is highly significant and negatively related to crime levels as expected with $p=0.68%$.   The area in the subdivision is not statistically significant and the coefficient is nearly zero.   Lastly, we consider the category of subdivision.   `category`=`Mobile Home` has a very strong positive association with higher crime levels while all other types of subdivisions are negatively related.
+
+We conclude that a \$100,000 increase in median household income (`avg_income`) would be associated with 0.86 fewer incidents per year after incorporating the past year's crime level.  By comparison with the OLS model, the coefficients are larger.   A \$100,000 increase in `avg_income` reduces crime by 1.03 incident per year.   This difference is because the OLS model does not control for spatial clustering.
+
+As a sensitivity check, if we exclude past crime levels as a predictor in the spatial lag model, the coefficient for `avg_income` grows larger.   In that case, a \$100,000 increase in `avg_income` reduces crime by 1.7 instead of .86 incidents per year per subdivision.   
+
+Interestingly, crime levels appear unrelated to the square footage of the subdivision `shape_starea`.   Perhaps, crime rarely occurs on empty land but requires the inhabitants as perpetrators and victims.
+
+However, crime level in the Town of Cary appear relatively low.   The median number of crimes is 1 incident per year per subdivision while the mean is around 3.  The relatively modest spatial autoregressive coefficient may be explained by two effects:  the low overall level of crime - in some cases - 1 incident per year  and the geographic dispersion of the subdivisions.   Some subdivisions are geographically isolated from others.   Adjacent subdivisions are often separated by landscaping and trees with no connecting paths or roads.   Sometimes you cannot walk between subdivisions except along arterial public highways.  
 
 # Conclusion
+
+Spatial regression is a fruitful method to investigate crime incidents in residential subdivisions.   A recent literature survey [Kounadi, Ristea, et. al, 2020](https://doi.org/10.1186/s40163-020-00116-7) found 193 papers in spatial crime forecasting. None of the top 32 papers used residential subdivisions as spatial unit of measure.   Most papers used geographic grids or broader regions like districts, cities or counties.   One challenge of using residential subdivisions is their heterogeneity of purposes and population and geographic dispersion.   A benefit of using residential subdivisions is that they are actual communities - often defined by a homeowner association with like-minded residents.
+
+We experimented with non-traditional spatial weight measures to overcome technical challenges to conducting spatial regressions and produce intuitively sensible model coefficients.   We conjecture that spatial dependency in the Town is local rather than global.   
+A future direction of study is to use localized spatial regression analysis to analyze crime in such a sprawling town.
 
 # Appendices
 
@@ -441,7 +670,16 @@ Vignettes for the use of `sf` package in R by Edzer Pebesma:
 [Crime Prediction & Monitoring Framework Based on Spatial Analysis]
 (https://www.sciencedirect.com/science/article/pii/S187705091830807X)
 
+[Dash, Safro, Srinivasamurthy 2018] Spatio-temporal prediction of crimes using network analytic approach
+(https://arxiv.org/abs/1808.06241)
+
 [Kounadi, Ristea, et al.(2020). A systematic review on spatial crime forecasting. Crime Science 9:7](https://doi.org/10.1186/s40163-020-00116-7)
+
+Bivand, Pebesma, Gomez-Rubio **Applied Spatial Data Analysis with R**
+(http://gis.humboldt.edu/OLM/r/Spatial%20Analysis%20With%20R.pdf)
+
+Lansley, Cheshire **An Introduction to Spatial Data Analysis and Visualisation in R**
+(https://spatialanalysisonline.com/An%20Introduction%20to%20Spatial%20Data%20Analysis%20in%20R.pdf)
 
 
 

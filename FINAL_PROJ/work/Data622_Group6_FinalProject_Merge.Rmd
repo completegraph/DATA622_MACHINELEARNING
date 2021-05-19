@@ -65,6 +65,9 @@ library(FactoMineR)
 library(factoextra)
 library(fastDummies)
 
+# Randy dependencies
+library(GGally)
+
 
 ```
 
@@ -76,15 +79,6 @@ library(fastDummies)
 runSlowChunks = F
 
 ```
-
-
-# $\color{red}{\text{Notes for Group 6}}${-}
-
-## Group and Final Project Deadlines
-
-* **Report Merge:**   May 17, 2021  Monday EST
-* **Youtube Recording**  Prepared and Uploaded:   May 19, 2021  Wed
-* **Project Due Date:**  $\color{red}{\text{Submitted by May 20, 2021 Thursday 11:59pm EST}}$
 
 # Introduction {-}
 
@@ -367,6 +361,169 @@ div = st_read("div.geojson")
 ```
 
 # Visualization and Statistical Summary
+
+
+```{r}
+geocrime <- crimesdiv
+
+geodiv <- div
+```
+
+## Exploratory Data Analysis
+
+
+
+### Demographics
+```{r}
+#head(geodiv)
+```
+
+
+```{r}
+#skimr::skim(geodiv)
+```
+
+
+```{r}
+#sum(geodiv$approvedlots)
+```
+
+
+```{r}
+plot(geodiv["approvedlots"])
+```
+
+#### Error
+```{r eval=FALSE}
+library(ggmap)
+map <- get_map(c(left = -78.95, bottom = 35.64, right = -78.72, top = 35.87))
+ggmap(map) +
+  geom_sf(data = geodiv, aes(fill=approvedlots)) +
+  coord_sf(crs = st_crs(2264))
+
+test <- get_map(c(lon = -78.8, lat = 35.75))
+
+```
+
+
+```{r}
+geodiv2 <- geodiv %>% 
+  mutate(avg_lot_area = shape_starea/approvedlots) 
+plot(geodiv2["avg_lot_area"])
+```
+
+
+```{r}
+hist(geodiv$avg_income)
+```
+
+
+```{r}
+plot(geodiv["avg_income"])
+```
+
+
+```{r}
+geodiv2 <- geodiv2 %>%
+  mutate(income_to_lot_area = avg_income/avg_lot_area)
+plot(geodiv2["income_to_lot_area"])
+```
+
+### Crime
+
+```{r}
+#head(geocrime)
+```
+
+
+```{r}
+#skimr::skim(geocrime)
+```
+
+
+```{r}
+plot(geocrime["district"])
+```
+
+
+```{r}
+data.frame(table(geocrime$crime_type, geocrime$district)) %>% 
+  spread(Var2, Freq) %>% 
+  mutate(total = D1+D2+D3) %>% 
+  arrange(desc(total))
+```
+
+
+```{r}
+data.frame(table(geocrime$crime_category, geocrime$district)) %>% 
+  spread(Var2, Freq) %>% 
+  mutate(total = D1+D2+D3) %>% 
+  arrange(desc(total))
+```
+
+
+```{r}
+data.frame(table(geocrime$offensecategory, geocrime$district)) %>% 
+  spread(Var2, Freq) %>% 
+  mutate(total = D1+D2+D3) %>% 
+  arrange(desc(total))
+```
+
+
+```{r}
+crime_count <- geocrime %>% 
+  group_by(div_id) %>% 
+  summarize(num = n()) 
+geocount <- st_join(geodiv, crime_count, by = "div_id")
+plot(geocount["num"])
+```
+
+
+```{r}
+geocrime %>% 
+  mutate(month = lubridate::month(newdate)) %>% 
+  group_by(month) %>% 
+  count(crime_category) %>% 
+  ggplot(aes(month, n)) +
+  geom_line() +
+  facet_wrap(vars(crime_category))
+```
+
+
+```{r}
+geocrime %>% 
+  mutate(day = weekdays(newdate)) %>% 
+  group_by(day) %>% 
+  count(crime_category) %>% 
+  ggplot(aes(day, n)) +
+  geom_col() +
+  facet_wrap(vars(crime_category))
+```
+
+
+```{r}
+geocrime %>% 
+  mutate(month = lubridate::month(newdate), 
+         year = lubridate::year(newdate)) %>% 
+  mutate(month_year = as.factor((year*100)+month)) %>% 
+  group_by(month_year) %>% 
+  count(crime_category) %>% 
+  ggplot(aes(month_year, n)) +
+  geom_col() +
+  scale_x_discrete()+
+  facet_wrap(vars(crime_category))
+```
+
+
+```{r}
+crime_count2 <- geocrime %>% 
+  group_by(div_id, crime_category) %>% 
+  summarize(num = n()) %>% 
+  spread(crime_category, num)
+geocount2 <- st_join(geodiv, crime_count2, by = "div_id")
+plot(geocount2[10:18])
+```
+
 
 
 # k-Means Clustering 
@@ -1414,10 +1571,6 @@ $$w[i,j] = \frac{rw[i,j]}{\sum_{h=1}^{N} rw[i,h]} \text{ where } N = \text{ numb
 
 Surprisingly, $\alpha=2$ causes the Lagrange multipler spatial dependency tests to fail to be statistically sigificant whereas $\alpha=1$ and $\alpha=0.5$ produces strong results.  Because the distance-based weights are not scale independent, (we use feet to measure distances), we attribute this statistical significance effect to the fact the decay rate of the weights.   A large $\alpha$ makes the weights decay too fast.
 
-
-[Applications of Spatial Weights: R Notes by Luc Anselin and Grant Morrison]
-(https://spatialanalysis.github.io/lab_tutorials/Applications_of_Spatial_Weights.html#spatially-lagged-variables)
-
 ```{r knn-weights}
 
 c_div = st_centroid( st_geometry(div))
@@ -1503,11 +1656,15 @@ However, crime level in the Town of Cary appear relatively low.   The median num
 
 # Conclusion
 
-The study of crime with machine learning methods in a large town can have public policy implications.   Generally, such studies are rarely conducted.   So inhabitants may find the results distressful especially if they learn that they live in a high crime region. This can bring political pressure on town mayors, councils and police chiefs to fix persistent crime.  In addition, this type of information was unavailable to one of the authors when purchasing a home in this town.   Such information can helpful in real estate purchase decisions.
+The study of crime with machine learning methods in a large town can have public policy and commercial implications.  Inhabitants of high crime regions may demand better policing or social services.  This can bring political pressure on town mayors, councils and police chiefs to fix persistent crime or change budget priorities.  Separately, it can be used as part of better policing strategies.  This type of information was unavailable to one of the authors when purchasing a home in this town.   Such information can helpful in real estate purchase decisions where the buyer is uninformed about local conditions and consequently alter housing demand.
 
-We have explored the crime data from the Town of Cary and identified clusters based on crime rates, income and subdivision characteristics.   Spatial regression is a fruitful method to investigate crime incidents in residential subdivisions.    We experimented with non-traditional spatial weight measures to overcome technical challenges to conducting spatial regressions and produce intuitively sensible model coefficients.   We conjecture that spatial dependency in the Town is local rather than global.  A future direction of study is to use localized spatial regression analysis to analyze crime in such a sprawling town.   
+We have explored the crime data from the Town of Cary and identified clusters based on crime rates, income and subdivision characteristics.   The k-means clustering suggests that $k=5$ clusters can be used to analyze total crimes and $k=3$ can be sufficient to analyze individual types like larceny or assaults.   Moreover, the k-means clustering metric used only income and crime levels rather than physical distance.  Nonetheless, the resulting clusters appear to have form geographic shape as well - this suggests spatial dependency is implicit in both the income and crime level data.
 
-In the principal components analysis context, One further avenue of research would be to look at birth weights which in Masi (2007) are shown to have a relation to crime. 
+
+In the principal components analysis context, principal components analysis was run on the subdivisions data against a matrix of crime category counts.  The principal factors capture some of the intuition of the crime data.   The first PCA component appears to capture crime type while the second PCA dimension captures housing information.   Single-Family detached housing is significantly lower crime while Condo, Townhomes seem to load on higher crime.  One further avenue of research would be to look at birth weights which in Masi (2007) are shown to have a relation to crime. 
+
+Spatial regression is a fruitful method to investigate crime incidents in residential subdivisions.    We experimented with non-traditional spatial weight measures to overcome technical challenges to conducting spatial regressions and produce intuitively sensible model coefficients.   We find that past crime levels, household income, the category of residence and number of homes in the subdivision affect predicted crime levels.   A next logical step is to backtest such a regression model with subsequent periods.   In addition, we conjecture that spatial dependency in the Town is local rather than global.  A future direction of study is to use localized spatial regression analysis to analyze crime in such a sprawling town.   Finally, residential subdivisions data need to be paired with commercial districts to create a holistic picture of municipal crime.   After all, the first law of geography does not care about residential zoning regulations.
+
 
 
 
@@ -1516,12 +1673,14 @@ In the principal components analysis context, One further avenue of research wou
 ## References
 
 
-Masi, C. M., Hawkley, L. C., Piotrowski, Z. H., & Pickett, K. E. (2007). Neighborhood economic disadvantage, violent crime, group density, and pregnancy outcomes in a diverse, urban population. Social science & medicine, 65(12), 2440-2457.
+Bivand, Pebesma, Gomez-Rubio **Applied Spatial Data Analysis with R**
+(http://gis.humboldt.edu/OLM/r/Spatial%20Analysis%20With%20R.pdf)
 
-National Incident-Based Reporting System (NIBRS) codes are described in the 2019 update:
-(https://www.fbi.gov/file-repository/ucr/ucr-2019-1-nibrs-technical-specification.pdf/view)
 
-Vignettes for the use of `sf` package in R by Edzer Pebesma:
+[Luc Anselin and Grant Morrison Applications of Spatial Weights: R Notes]
+(https://spatialanalysis.github.io/lab_tutorials/Applications_of_Spatial_Weights.html#spatially-lagged-variables)
+
+Edzer Pebesma vignettes for the use of `sf` package in R:
 (https://r-spatial.github.io/sf/articles/)
 
 [Crime Prediction & Monitoring Framework Based on Spatial Analysis]
@@ -1532,12 +1691,13 @@ Vignettes for the use of `sf` package in R by Edzer Pebesma:
 
 [Kounadi, Ristea, et al.(2020). A systematic review on spatial crime forecasting. Crime Science 9:7](https://doi.org/10.1186/s40163-020-00116-7)
 
-
-Bivand, Pebesma, Gomez-Rubio **Applied Spatial Data Analysis with R**
-(http://gis.humboldt.edu/OLM/r/Spatial%20Analysis%20With%20R.pdf)
-
 Lansley, Cheshire **An Introduction to Spatial Data Analysis and Visualisation in R**
 (https://spatialanalysisonline.com/An%20Introduction%20to%20Spatial%20Data%20Analysis%20in%20R.pdf)
+
+Masi, C. M., Hawkley, L. C., Piotrowski, Z. H., & Pickett, K. E. (2007). Neighborhood economic disadvantage, violent crime, group density, and pregnancy outcomes in a diverse, urban population. Social science & medicine, 65(12), 2440-2457.
+
+National Incident-Based Reporting System (NIBRS) codes are described in the 2019 update:
+(https://www.fbi.gov/file-repository/ucr/ucr-2019-1-nibrs-technical-specification.pdf/view)
 
 (https://uc-r.github.io/kmeans_clustering)
 

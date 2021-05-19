@@ -1482,7 +1482,7 @@ Look at the individual plots we see a clear split of townhomes and especially si
 
 The literature on criminal prediction in machine learning describes several ways to apply municipal crime report data. [Kounadi, Ristea, et al.(2020)](https://doi.org/10.1186/s40163-020-00116-7)   One approach predicts crime hot spots in real-time for various types of crimes like burglaries, assaults.  Other approaches look at spatial-temporal patterns across an entire city.  
 
-In this section, we adopt the approach of predicting aggregate crime levels within the residential subdivisions of the town over a single year from static characteristics and past crime levels.  There are two reasons to restrict regression analyses in this manner:
+In this section, we adopt the approach of predicting aggregate crime rates within the residential subdivisions of the town over a single year from static characteristics and past crime rates.  There are two reasons to restrict regression analyses in this manner:
 
    * the town has expanded dramatically in the last decade - so many neighborhoods did not exist a decade ago.  But, 
    the data to track town expansion is readily available.
@@ -1553,7 +1553,7 @@ We illustrate the data aggregation visually by density plot below.   The distrib
 
 regdivdata = div %>% left_join(divfreq, by="div_id") %>% mutate( `2018` = coalesce(`2018`, 0), `2019` = coalesce(`2019`, 0 ), `2020` = coalesce(`2020`, 0 ) )
 
-regdivdata = regdivdata %>% mutate( cr2018 = `2018`/approvedlots, cr2019 = `2019`/approvedlots, cr2020 = `2020`/approvedlots)
+regdivdata = regdivdata %>% mutate( cr2018 =  (`2018`)/approvedlots, cr2019 =  (`2019`)/approvedlots, cr2020 =  (`2020`)/approvedlots)
 
 #head(regdivdata) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover,"))
 
@@ -1562,17 +1562,17 @@ regdivdata %>% dplyr::select(div_id, `2018`, `2019` , `2020`) %>% st_drop_geomet
 
 ```
 
-Lastly, we visualize each year's crime level geographically below.  We can see the clear presence of high crime levels in a small number of subdivisions that persist across the 3 years while most subdivisions are low crime.
+Lastly, we visualize each year's crime rate geographically below.  We can see the clear presence of high crime rates in a small number of subdivisions that persist across the 3 years while most subdivisions are low crime.
 We also see the presence of some clusters that suggest spatial dependencies.
 
 ```{r qtm-graphs}
 
-qtm2018 = qtm(regdivdata, "2018") + tm_grid(alpha=0.3)
+qtm2018 = qtm(regdivdata, "cr2018") + tm_grid(alpha=0.3)
 
-qtm2019 = qtm(regdivdata, "2019") + tm_grid(alpha=0.3) + tm_compass()
+qtm2019 = qtm(regdivdata, "cr2019") + tm_grid(alpha=0.3) + tm_compass()
 
-qtm2020 = qtm(regdivdata, "2020") + tm_scale_bar(position=c("center", "bottom" ) ) + tm_grid(alpha=0.3) +
-    tm_credits("Crime Counts \n per \n Residential\n Subdivision\n per Year\nCary, NC" , position=c("left", "center"), width=0.25, align="left" )
+qtm2020 = qtm(regdivdata, "cr2020") + tm_scale_bar(position=c("center", "bottom" ) ) + tm_grid(alpha=0.3) +
+    tm_credits("Crime Rates \n per \n Residential\n Subdivision\n per Year\nCary, NC" , position=c("left", "center"), width=0.25, align="left" )
 
 qtm2018
 
@@ -1590,13 +1590,14 @@ We construct regression models to predict crime levels  2019 in terms of static 
 
 ```{r OLS-gm1}
 
-#gm1 = lm( cr2019 ~ cr2018 + avg_income + approvedlots + shape_starea + factor(category), data = regdivdata)
+OLS1 = lm( cr2019 ~ cr2018 + avg_income + approvedlots + shape_starea + factor(category), data = regdivdata)
+summary(OLS1)
 ```
 
 ```{r OLS-gm2}
 
-OLS2 = lm( `2019` ~ `2018` + avg_income + approvedlots + shape_starea + factor(category), data = regdivdata)
-summary(OLS2)
+#OLS2 = lm( `2019` ~ `2018` + avg_income + approvedlots + shape_starea + factor(category), data = regdivdata)
+#summary(OLS2)
 ```
 
 To run a spatial regression, we first have to build a spatial weight matrix based on the dependencies between subdivisions.
@@ -1659,25 +1660,39 @@ plot(wts_k6_a2, c_div, lwd = .5, col = "red", cex = 0.5)
 To identify the type of spatial regression model to run, we use the Lagrange multipler tests.  To identify the presence of spatial dependencies, we use Moran's I-statistic.  The Lagrange multiplier test for the spatial weights $W$ and above OLS model show that a spatial lag model is appropriate with p-value of 0.88% significance but a spatial errors model is not with a p-value of 86% significance.
 
 ```{r lmtest-k6}
-lm.LMtests(OLS2, wts_k6_a2, test = c("LMlag", "LMerr"))
+#lm.LMtests(OLS2, wts_k6_a2, test = c("LMlag", "LMerr"))
+
+
+lm.LMtests(OLS1, wts_k6_a2, test = c("LMlag", "LMerr"))
+
 ```
 
 Moran's I statistic on the response variable `2019` crime levels shows spatial dependencies exist.  Clustering exists and is highly statistically significant.  Moran's I statistic shows a value of 0.17 while p-value is nearly 0.
 
 ```{r moran.test}
-moran.test( regdivdata$`2019`, wts_k6_a2)
-moran.plot( regdivdata$`2019`, wts_k6_a2)
+#moran.test( regdivdata$`2019`, wts_k6_a2)
+#moran.plot( regdivdata$`2019`, wts_k6_a2)
+
+moran.test( regdivdata$`cr2019`, wts_k6_a2)
+moran.plot( regdivdata$`cr2019`, wts_k6_a2)
+
 
 ```
 
 We summarize the spatial lags model below.
 
 ```{r spatial-lag-model6}
-spatial.lag.k6a2 = lagsarlm( `2019` ~ `2018` + avg_income + approvedlots + shape_starea + factor(category), 
-                           data = regdivdata , wts_k6_a2 )
+#spatial.lag.k6a2 = lagsarlm( `2019` ~ `2018` + avg_income + approvedlots + shape_starea + factor(category), 
+#                           data = regdivdata , wts_k6_a2 )
 
-summary(spatial.lag.k6a2)
+#summary(spatial.lag.k6a2)
 ```
+
+```{r spatial-lag-crmodel6}
+spatial.lag.crk6a2 = lagsarlm( cr2019 ~ cr2018 + avg_income + approvedlots + scale(shape_starea) + factor(category),  data = regdivdata , wts_k6_a2 )
+summary(spatial.lag.crk6a2)
+```
+
 ## Discussion 
 
 The equation defining the model can be written as:
@@ -1686,24 +1701,24 @@ $$y=\rho W y + \mathbf{X}b + u$$
 
 where the response variable $y$ is a $N \times 1$ vector.  $\rho$ is the spatial autoregressive coefficient and $W$ is the $N \times N$ spatial weights matrix described earlier.  $\mathbf{X}$ is the matrix of subdivision level data either crime in 2018 and static characteristic data.  $u$ is the vector of random error terms.
 
-We observe a low but significant spatial dependency between crime levels in adjoining residential subdivisions.
-The spatial lag regression is statistically significant as its p-value $p=1.31\%$.  The spatial autoregressive coefficient $\rho = 0.10$ appears small in magnitude but this may be explained by the geographic dispersion of the subdivisions.   Some subdivisions are geographically isolated from others.   Adjacent subdivisions are often separated by landscaping and trees or lack connecting paths or roads.  
+We observe a low spatial dependency significant at the p=11% level between crime rates in adjoining residential subdivisions.
+The spatial autoregressive coefficient $\rho = 0.09$ appears small in magnitude but this may be explained by the geographic dispersion of the subdivisions.   Some subdivisions are geographically isolated from others.   Adjacent subdivisions are often separated by landscaping and trees or lack connecting paths or roads.  
 
 Now let us interpret the coefficients.
 
-  * The past crime level `2018` is very statistically significant and positively associated with `2019` crime level.   45% of last year's crime level contributes to our predicted `2019` level.
+  * The past crime rate `cr2018` is very statistically significant and positively associated with `cr2019` crime level.   30% of last year's crime level contributes to our predicted `cr2019` rate.
 
-  * `approvedlots` is very significant and positively associated with `2019` crime.  An extra 100 lots predicts an increase of 1.07 crime incidents per year.   This makes sense.  More residents means more crimes.
+  * `approvedlots` is not significant but negatively associated with `cr2019` crime.  This makes sense because we are predicting crime rates per lot, not crime total counts.   The negative sign suggests large subdivisions may have proportionately less crime.
   
-  *  `avg_income` is highly significant and negatively related to crime levels.   A \$100,000 increase in median household income (`avg_income`) predicts 0.86 fewer incidents per year *after* incorporating the past year's crime level.  This is a large impact because the median number of incidents per year is 1.
+  *  `avg_income` is highly significant and negatively related to crime rates.   A \$100,000 increase in median household income (`avg_income`) predicts 1.8 fewer incidents per year in a typical 100-lot subdivision. *after* incorporating the past year's crime level.  This is a sizable impact.
   
-  * `shape_starea` the area in the subdivision is not statistically significant and the coefficient is nearly zero. Perhaps, crime rarely occurs on empty land but requires the inhabitants as perpetrators and victims.
+  * `shape_starea` the area in the subdivision is not statistically significant. Perhaps, crime rarely occurs on empty land but requires the inhabitants as perpetrators and victims.
 
-  * The residential subdivision `category` is a factor variable.  Its base level (`Apartment`) is associated with 2.95 incidents per year (all dummies are set to zero).   `category`=`Mobile Home` adds 1.27 incidents over the base level.  The most frequent category is `Single-Family Detached` which subtracts 2.03 incidents from the base level.   These are large effects and most coefficients are statistically significant.  `Mixed Residential` is not significant because of the small sample size (only 4).
+  * The residential subdivision `category` is a factor variable.  Its base level (`Apartment`) is associated with the intercept level of crime:  0.0541 incidents per approved lot per year (all dummies are set to zero).   `category`=`Mobile Home` adds 1.27 incidents over the base level.  The most frequent category is `Single-Family Detached` which subtracts 0.014 incidents per lot per year from the base level.   
 
-Comparing the OLS to the spatial lag model, the OLS coefficients are larger.   For example, \$100,000 increase in `avg_income` reduces crime by 1.03 incident per year in the OLS model vs. 0.86 in the spatial lag model.  This difference is expected because the spatial lag model allocates some of the observed response to spatial effects.   Because crime level in Cary is quite low (the median number of crimes is 1 incident per year), small changes in parameter values are actually quite significant as a percentage of crime levels.
+Comparing the OLS to the spatial lag model, the OLS coefficients are larger.   For example, \$100,000 increase in `avg_income` reduces crime by 1.88 incidents in a 100-lot subdivision per year in the spatial model vs. 2.13 in the spatial lag model.  This difference is expected because the spatial lag model allocates some of the observed response to spatial effects.   
 
- 
+Lastly, we should mention that a spatial lag model on the raw crime incident counts produces higher levels of statistical significance but comparable parameter estimates.   We choose to not report those results since this would be applying a continuous model for discrete non-negative data.
 
 # Conclusion
 
@@ -1714,7 +1729,9 @@ We have explored the crime data from the Town of Cary and identified clusters ba
 
 In the principal components analysis context, principal components analysis was run on the subdivisions data against a matrix of crime category counts.  The principal factors capture some of the intuition of the crime data.   The first PCA component appears to capture crime type while the second PCA dimension captures housing information.   Single-Family detached housing is significantly lower crime while Condo, Townhomes seem to load on higher crime.  One further avenue of research would be to look at birth weights which in Masi (2007) are shown to have a relation to crime. 
 
-Spatial regression is a fruitful method to investigate crime incidents in residential subdivisions.    We experimented with non-traditional spatial weight measures to overcome technical challenges to conducting spatial regressions and produce intuitively sensible model coefficients.   We find that past crime levels, household income, the category of residence and number of homes in the subdivision affect predicted crime levels.   A next logical step is to backtest such a regression model with subsequent periods.   In addition, we conjecture that spatial dependency in the Town is local rather than global.  A future direction of study is to use localized spatial regression analysis to analyze crime in such a sprawling town.   Finally, residential subdivisions data need to be paired with commercial districts to create a holistic picture of municipal crime.   After all, the first law of geography does not care about residential zoning regulations.
+Spatial regression is a fruitful method to investigate crime incidents in residential subdivisions.    We experimented with non-traditional spatial weight measures to overcome technical challenges to conducting spatial regressions and produce intuitively sensible model coefficients.   We find that past crime rates, household income, the category of residence and number of homes in the subdivision affect predicted crime rates.   A next logical step is to back test such a regression model with subsequent periods.   In addition, we conjecture that spatial dependency in the Town is local rather than global.  
+
+More complex versions of the spatial model could also be helpful.  We have modeled crime rates as continuous variables in a spatial lag model, but we could also model total incident counts using a Poisson or negative binomial spatial regression model.  Finally, residential subdivisions data need to be paired with commercial districts to create a holistic picture of municipal crime.   After all, the first law of geography does not care about residential zoning regulations.
 
 
 

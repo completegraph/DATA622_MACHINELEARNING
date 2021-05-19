@@ -88,8 +88,7 @@ in choosing a lesser known town instead of a metropolitan area and in its use of
 
 **Section 1** describes the background and data sources.
 
-**Section 2** conducts data wrangling and interpolate data to obtain the dataset for our analysis.
-We construct and describe datasets in later sections.
+**Section 2** shows data visualization and exploratory data analysis.
 
 **Section 3** applies a k-means clustering algorithm to identify crime hot spots
 
@@ -369,32 +368,43 @@ geocrime <- crimesdiv
 geodiv <- div
 ```
 
+
 ## Exploratory Data Analysis
 
-
+In this section we're going to review the data we're working with in this project, generate descriptive statistics, and look at trends over time. Our datasets are broken out by census demographic data and crime incidents data from 2018 through 2020 around Cary, North Carolina.  
 
 ### Demographics
+
+The census dataset contains information on housing type, neighborhood, division ID, area, number of approved lots, average income, and polygon geometry. Our polygons granularity is at the division ID level. 
+
 ```{r}
 #head(geodiv)
 ```
 
+Here we review the completeness and summary statistics of our data. There is minimal missing data. Geometry and division IDs are unique. There are 8 categories and 14 descriptions. Approved lots are skewed to the right with a mean of 97, standard deviation of 110, and a max of 1373. Average income looks more evenly distributed and will be examined further. 
 
 ```{r}
 #skimr::skim(geodiv)
 ```
 
+The total count of approved lots in Cary, NC is 69129. The census estimates a total population of 170,282*. This estimate is provided for context but is not broken down at the division level and is not referenced again in our analysis. 
+
+*https://www.census.gov/programs-surveys/popest/data/tables.2019.html
 
 ```{r}
-#sum(geodiv$approvedlots)
+sum(geodiv$approvedlots)
 ```
 
+This is a plot of the number of lots in each division. We can see large numbers of lots in the Northeast and Central regions. 
 
 ```{r}
 plot(geodiv["approvedlots"])
 ```
 
-#### Error
+
 ```{r eval=FALSE}
+# Errors, don't include.
+
 library(ggmap)
 map <- get_map(c(left = -78.95, bottom = 35.64, right = -78.72, top = 35.87))
 ggmap(map) +
@@ -406,22 +416,34 @@ test <- get_map(c(lon = -78.8, lat = 35.75))
 ```
 
 
+The plot above would help us to understand the size of the population better if we controlled for area. Of course, the divisions with more area will have more lots. 
+This time we divide the number of approved lots by division area to give us population density. Now we can more easily see the three high density areas in the East and the one high density area in the Southwest. 
+
 ```{r}
 geodiv2 <- geodiv %>% 
   mutate(avg_lot_area = shape_starea/approvedlots) 
 plot(geodiv2["avg_lot_area"])
 ```
 
+Next let's look at average income. There seems to be a fairly normal distribution. Our descriptive statistics previously showed a mean of 103,294 with a standard deviation of 32,580. 
+There are sure to be individual outliers but as these are divisional averages, this makes sense.
 
 ```{r}
 hist(geodiv$avg_income)
 ```
-
+Now let's plot the average income on a map. 
+The Northeast looks like the highest concentration of wealth along with another high income cluster in the South. 
+The most Western and Central areas have a high cluster of low income divisions.
 
 ```{r}
 plot(geodiv["avg_income"])
 ```
 
+We can now combine these features of area and income. 
+This will help identify densely populated, high income areas and sparsely populated, low income areas. 
+These could show the wealthy city centers and poor rural areas that may be impacted by different types of crimes. 
+Viewing the map we can see small, wealthy divisions in the Northeast and occasionally located throughout the Central and Western portions of the map. 
+This type of analysis seems to favor smaller divisional areas and may be of limited value. 
 
 ```{r}
 geodiv2 <- geodiv2 %>%
@@ -431,28 +453,33 @@ plot(geodiv2["income_to_lot_area"])
 
 ### Crime
 
-```{r}
-#head(geocrime)
-```
-
+Now let's review our crime dataset. This dataset has one row for each crime documented in Cary, NC. The geometric level of granularity is a point with longitude and latitude documented. The date and details about the crime are included. The division ID in which the point falls has been joined in, along with the rest of the demographic information about that division. Another level of detail is the police district that responded to the crime. 
 
 ```{r}
-#skimr::skim(geocrime)
+head(geocrime)
 ```
 
+All of the crime data is categorical data. There are 8 crime categories, 23 offense categories, and 95 crime types in this dataset. There are three police districts.
+
+```{r}
+skimr::skim(geocrime)
+```
+
+Here is a plot of the police districts using the locaiton points. The lines seem clearly drawn. 
 
 ```{r}
 plot(geocrime["district"])
 ```
-
+For the summary of crime categories, we focus on aggregating at the district level. Lets look at number of lots and income for the districts. As expected from our earlier analysis, district 2 has a higher average income and district 1 has a lower average income. District 2 has about 20% more approved lots that districts 1 and 3. 
 
 ```{r}
-data.frame(table(geocrime$crime_type, geocrime$district)) %>% 
-  spread(Var2, Freq) %>% 
-  mutate(total = D1+D2+D3) %>% 
-  arrange(desc(total))
+geocrime %>% 
+  group_by(district) %>% 
+  summarise(income = mean(avg_income),
+            lots = sum(approvedlots))
 ```
 
+Next lets look at crime categories. By far, the other category stands out as the most frequent crime category. District 2 has higher rates of Larceny, Burglary, and Motor Vehicle Theft while district 1 has higher rates of Aggravated Assaults. 
 
 ```{r}
 data.frame(table(geocrime$crime_category, geocrime$district)) %>% 
@@ -461,6 +488,7 @@ data.frame(table(geocrime$crime_category, geocrime$district)) %>%
   arrange(desc(total))
 ```
 
+Going one level of detail down, let's look at offense categories. Larceny and Burglary are at the same level of granularity and have roughly the same counts. This may hint as a small number of errors in the data. Again we see All Other Offenses taking a top spot in our list. The next notable offenses are Fraud, Simple Assault, Vandalism and Drugs. Simple Assault and Motor Vehicle Theft stand out as not matching their counterparts in the crime categories. The All Other categories may be different and different levels. 
 
 ```{r}
 data.frame(table(geocrime$offensecategory, geocrime$district)) %>% 
@@ -469,6 +497,16 @@ data.frame(table(geocrime$offensecategory, geocrime$district)) %>%
   arrange(desc(total))
 ```
 
+Lastly we look at our lowest level of granularity, crime type. At this level, we get to see more detail on earlier categories like Larceny, many of which are from a motor vehicle. Ordinance is a new category that must have been rolled up in the other categories. A large component of the ordiances section is Animal Bites. Almost half the animal bites are from district 3 while fewer are from district 1. Warrant for Arrest is another new category that doesn't give much detail about the type of previous offences.
+
+```{r}
+data.frame(table(geocrime$crime_type, geocrime$district)) %>% 
+  spread(Var2, Freq) %>% 
+  mutate(total = D1+D2+D3) %>% 
+  arrange(desc(total))
+```
+
+Here we'll plot the total number of crimes by division. We can see hot spots in small divisions in the West and Northeast. Larger area divisions seem to have higher numbers of crimes but also may have larger populations.
 
 ```{r}
 crime_count <- geocrime %>% 
@@ -477,7 +515,7 @@ crime_count <- geocrime %>%
 geocount <- st_join(geodiv, crime_count, by = "div_id")
 plot(geocount["num"])
 ```
-
+Looking at our crime categories, lets see if there are certain months in the year where crimes spike. Aggravated Assault, Larceny, and Motor Vehicle Theft seem to spike in July and August. December seems to be a drop in all crimes except Motor Vehicle Theft. Burglary seems to increase over the Winter months of January, February and March, then again to a lesser extent over the Summer. 
 
 ```{r}
 geocrime %>% 
@@ -486,34 +524,43 @@ geocrime %>%
   count(crime_category) %>% 
   ggplot(aes(month, n)) +
   geom_line() +
-  facet_wrap(vars(crime_category))
+  facet_wrap(vars(crime_category), scales = "free")
 ```
-
+Now let's see if days of the week make a difference in the number of crimes. There doesn't seem to be a large difference except for Robbery, but with such a small sample it's hard to draw any conclusions. You could say that there is a big difference between Larceny and Motor Vehicle Theft with more crimes on Mondays instead of Sundays. You could also say Aggravated Assault seems to increase on the weekends. 
 
 ```{r}
 geocrime %>% 
   mutate(day = weekdays(newdate)) %>% 
+  mutate(day = fct_relevel(day, "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")) %>% 
   group_by(day) %>% 
   count(crime_category) %>% 
   ggplot(aes(day, n)) +
   geom_col() +
-  facet_wrap(vars(crime_category))
+  facet_wrap(vars(crime_category), scales = "free") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
+Finally let's look at trends over time for crimes in our date range across Cary, NC. There is a clear upward trend for Motor Vehicle Theft since a low at the beginning of 2018. Larceny seems to have two large spikes over the last three years. Buglary seems to be going down since a high at the beginning of 2018 but there have been spike throughout 2019 and early 2020. There doesn't appear to be a pattern within the other categories. 
 
 ```{r}
+every_nth = function(n) {
+  return(function(x) {x[c(TRUE, rep(FALSE, n - 1))]})
+}
+
 geocrime %>% 
   mutate(month = lubridate::month(newdate), 
          year = lubridate::year(newdate)) %>% 
-  mutate(month_year = as.factor((year*100)+month)) %>% 
-  group_by(month_year) %>% 
+  mutate(year_month = as.factor((year*100)+month)) %>% 
+  group_by(year_month) %>% 
   count(crime_category) %>% 
-  ggplot(aes(month_year, n)) +
+  ggplot(aes(year_month, n)) +
   geom_col() +
-  scale_x_discrete()+
-  facet_wrap(vars(crime_category))
+  scale_x_discrete(breaks = every_nth(n = 4)) +
+  facet_wrap(vars(crime_category), scales = "free_y") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
+Lastly lets take a look at where crimes are occuring by different category. Burglary and Larceny seems to have a similar distribution across cenral and Northeastern area. There is a high concentration of Motor Vehicle Theft in the NorthEast and some central. Aggravated Assault seems to have a similar distribution to Motor Vehicle Theft with fewer occurances. All Other crime seems to have the same distribution as number of lots. There is not enough data for the other categories. 
 
 ```{r}
 crime_count2 <- geocrime %>% 
@@ -523,7 +570,6 @@ crime_count2 <- geocrime %>%
 geocount2 <- st_join(geodiv, crime_count2, by = "div_id")
 plot(geocount2[10:18])
 ```
-
 
 
 # k-Means Clustering 
@@ -1569,7 +1615,7 @@ Then we define the row standardized weights $w[i,j]$ in a matrix $W$ as:
 $$w[i,j] = \frac{rw[i,j]}{\sum_{h=1}^{N} rw[i,h]} \text{ where } N = \text{ number of subdivisions} $$
 
 
-Surprisingly, $\alpha=2$ causes the Lagrange multipler spatial dependency tests to fail to be statistically sigificant whereas $\alpha=1$ and $\alpha=0.5$ produces strong results.  Because the distance-based weights are not scale independent, (we use feet to measure distances), we attribute this statistical significance effect to the fact the decay rate of the weights.   A large $\alpha$ makes the weights decay too fast.
+Surprisingly, $\alpha=2$ causes the Lagrange multiplier spatial dependency tests to fail to be statistically sigificant whereas $\alpha=1$ and $\alpha=0.5$ produces strong results.  Because the distance-based weights are not scale independent, (we use feet to measure distances), we attribute this statistical significance effect to the fact the decay rate of the weights.   A large $\alpha$ makes the weights decay too fast.
 
 ```{r knn-weights}
 
@@ -1641,18 +1687,23 @@ $$y=\rho W y + \mathbf{X}b + u$$
 where the response variable $y$ is a $N \times 1$ vector.  $\rho$ is the spatial autoregressive coefficient and $W$ is the $N \times N$ spatial weights matrix described earlier.  $\mathbf{X}$ is the matrix of subdivision level data either crime in 2018 and static characteristic data.  $u$ is the vector of random error terms.
 
 We observe a low but significant spatial dependency between crime levels in adjoining residential subdivisions.
-The spatial lag regression is statistically significant as $\rho = 0.10$ and its p-value $p=1.31\%$ is significant at the 5% level.  
+The spatial lag regression is statistically significant as its p-value $p=1.31\%$.  The spatial autoregressive coefficient $\rho = 0.10$ appears small in magnitude but this may be explained by the geographic dispersion of the subdivisions.   Some subdivisions are geographically isolated from others.   Adjacent subdivisions are often separated by landscaping and trees or lack connecting paths or roads.  
 
-Examining the coefficients, we see the past crime level `2018` is very statistically significant  $p < 2.2 \times 10^{-16}$ at expected sign and magnitude.   Likewise, the number of approved lots is also very significant $p=3.0 \times 10^{-11}$ while the coefficient is positive and small.   Average income is highly significant and negatively related to crime levels as expected with $p=0.68%$.   The area in the subdivision is not statistically significant and the coefficient is nearly zero.   Lastly, we consider the category of subdivision.   `category`=`Mobile Home` has a very strong positive association with higher crime levels while all other types of subdivisions are negatively related.
+Now let us interpret the coefficients.
 
-We conclude that a \$100,000 increase in median household income (`avg_income`) would be associated with 0.86 fewer incidents per year after incorporating the past year's crime level.  By comparison with the OLS model, the coefficients are larger.   A \$100,000 increase in `avg_income` reduces crime by 1.03 incident per year.   This difference is because the OLS model does not control for spatial clustering.
+  * The past crime level `2018` is very statistically significant and positively associated with `2019` crime level.   45% of last year's crime level contributes to our predicted `2019` level.
 
-As a sensitivity check, if we exclude past crime levels as a predictor in the spatial lag model, the coefficient for `avg_income` grows larger.   In that case, a \$100,000 increase in `avg_income` reduces crime by 1.7 instead of .86 incidents per year per subdivision.   
+  * `approvedlots` is very significant and positively associated with `2019` crime.  An extra 100 lots predicts an increase of 1.07 crime incidents per year.   This makes sense.  More residents means more crimes.
+  
+  *  `avg_income` is highly significant and negatively related to crime levels.   A \$100,000 increase in median household income (`avg_income`) predicts 0.86 fewer incidents per year *after* incorporating the past year's crime level.  This is a large impact because the median number of incidents per year is 1.
+  
+  * `shape_starea` the area in the subdivision is not statistically significant and the coefficient is nearly zero. Perhaps, crime rarely occurs on empty land but requires the inhabitants as perpetrators and victims.
 
-Interestingly, crime levels appear unrelated to the square footage of the subdivision `shape_starea`.   Perhaps, crime rarely occurs on empty land but requires the inhabitants as perpetrators and victims.
+  * The residential subdivision `category` is a factor variable.  Its base level (`Apartment`) is associated with 2.95 incidents per year (all dummies are set to zero).   `category`=`Mobile Home` adds 1.27 incidents over the base level.  The most frequent category is `Single-Family Detached` which subtracts 2.03 incidents from the base level.   These are large effects and most coefficients are statistically significant.  `Mixed Residential` is not significant because of the small sample size (only 4).
 
-However, crime level in the Town of Cary appear relatively low.   The median number of crimes is 1 incident per year per subdivision while the mean is around 3.  The relatively modest spatial autoregressive coefficient may be explained by two effects:  the low overall level of crime - in some cases - 1 incident per year  and the geographic dispersion of the subdivisions.   Some subdivisions are geographically isolated from others.   Adjacent subdivisions are often separated by landscaping and trees with no connecting paths or roads.   Sometimes you cannot walk between subdivisions except along arterial public highways.  
+Comparing the OLS to the spatial lag model, the OLS coefficients are larger.   For example, \$100,000 increase in `avg_income` reduces crime by 1.03 incident per year in the OLS model vs. 0.86 in the spatial lag model.  This difference is expected because the spatial lag model allocates some of the observed response to spatial effects.   Because crime level in Cary is quite low (the median number of crimes is 1 incident per year), small changes in parameter values are actually quite significant as a percentage of crime levels.
 
+ 
 
 # Conclusion
 
